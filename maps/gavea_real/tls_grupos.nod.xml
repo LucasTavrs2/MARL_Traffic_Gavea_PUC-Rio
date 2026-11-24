@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Agrupamento dos semaforos do recorte Gavea/PUC-Rio em controladores nomeados.
+     Junctions com o mesmo valor de tl formam um unico controlador.
+     Gerado a partir do gavea.net.xml de 24/11/2026 (netconvert 1.28.0). Hipoteses a confirmar em campo. -->
+<nodes>
+    <!-- Marques de Sao Vicente com Duque Estrada -->
+    <node id="cluster_12452739858_12660838313_1578702582" type="traffic_light" tl="msv_duque_estrada"/>
+    <!-- Travessia 35 m adiante, no portao da PUC (uma linha de parada por sentido) -->
+    <node id="12660838314" type="traffic_light" tl="msv_travessia_puc"/>
+    <node id="12660838315" type="traffic_light" tl="msv_travessia_puc"/>
+    <!-- Marques de Sao Vicente, a oeste da rotatoria -->
+    <node id="12651119807" type="traffic_light" tl="msv_rotatoria_oeste"/>
+    <node id="cluster_250736996_7864136566" type="traffic_light" tl="msv_rotatoria_oeste"/>
+    <!-- Marques de Sao Vicente, a nordeste da rotatoria -->
+    <node id="12658130857" type="traffic_light" tl="msv_rotatoria_nordeste"/>
+    <node id="cluster_12658130858_12658130859" type="traffic_light" tl="msv_rotatoria_nordeste"/>
+    <!-- Rubens Berardo, antes da Padre Leonel Franca -->
+    <node id="1765145639" type="traffic_light" tl="rubens_berardo"/>
+    <!-- Rodrigo Otavio com Artur Araripe -->
+    <node id="1765145414" type="traffic_light" tl="rodrigo_otavio_norte"/>
+    <node id="553328624" type="traffic_light" tl="rodrigo_otavio_norte"/>
+    <node id="1765145578" type="traffic_light" tl="rodrigo_otavio_norte"/>
+    <!-- Cruzamento principal: Rodrigo Otavio / Visconde de Albuquerque com Mario Ribeiro / Padre Leonel Franca -->
+    <node id="1765145405" type="traffic_light" tl="rodrigo_otavio_mario_ribeiro"/>
+    <node id="1765145410" type="traffic_light" tl="rodrigo_otavio_mario_ribeiro"/>
+    <node id="cluster_12363563840_1765145492_378700698" type="traffic_light" tl="rodrigo_otavio_mario_ribeiro"/>
+    <node id="cluster_149338902_151034115_1765145444_1765145464_#6more" type="traffic_light" tl="rodrigo_otavio_mario_ribeiro"/>
+    <node id="cluster_1765145526_378700699" type="traffic_light" tl="rodrigo_otavio_mario_ribeiro"/>
+    <node id="cluster_146222027_1765145467_344381852" type="traffic_light" tl="rodrigo_otavio_mario_ribeiro"/>
+    <!-- Bartolomeu Mitre com Visconde de Albuquerque -->
+    <node id="cluster_1765145546_1765145555_1765145576" type="traffic_light" tl="bm_visconde_albuquerque"/>
+    <node id="cluster_250736664_3676900779_3676900782" type="traffic_light" tl="bm_visconde_albuquerque"/>
+    <!-- Bartolomeu Mitre com Mario Ribeiro -->
+    <node id="146222031" type="traffic_light" tl="bm_mario_ribeiro"/>
+    <node id="cluster_146219615_146222032_2333874615_2333874616_#1more" type="traffic_light" tl="bm_mario_ribeiro"/>
+    <node id="3677076353" type="traffic_light" tl="bm_mario_ribeiro"/>
+    <node id="2333874624" type="traffic_light" tl="bm_mario_ribeiro"/>
+    <!-- Bartolomeu Mitre com Rua Tubira -->
+    <node id="3676900804" type="traffic_light" tl="bm_tubira"/>
+    <node id="cluster_1345343433_3676900799_3676900807" type="traffic_light" tl="bm_tubira"/>
+    <node id="cluster_1345343446_198102977_2467018881" type="traffic_light" tl="bm_tubira"/>
+</nodes>

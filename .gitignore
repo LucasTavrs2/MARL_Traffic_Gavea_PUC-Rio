@@ -1,0 +1,7 @@
+.venv/
+.vscode/
+*.log
+*.rou.xml
+*.rou.alt.xml
+*.trips.xml
+gavea_bruta.net.xml
