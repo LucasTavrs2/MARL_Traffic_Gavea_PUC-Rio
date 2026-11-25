@@ -38,8 +38,9 @@ class TestAmbiente(unittest.TestCase):
         self.assertEqual(env.agentes, ["cruz"])
         self.assertEqual(env.fixos, ["fixo"])
         self.assertEqual(env.n_acoes["cruz"], 2)
-        self.assertEqual(env.dim_obs["cruz"], 2 + 1 + 2 * 2 + 2)  # fases, pode trocar, entradas x2, saídas
-        self.assertEqual(obs["cruz"].shape, (9,))
+        # fases, pode trocar, por entrada (densidade, fila, espera) e por saída (densidade)
+        self.assertEqual(env.dim_obs["cruz"], 2 + 1 + 3 * 2 + 2)
+        self.assertEqual(obs["cruz"].shape, (11,))
 
     def test_respeita_verde_minimo_e_amarelo(self):
         env, sims = criar_env(delta=5, amarelo=3, verde_min=10)

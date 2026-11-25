@@ -1,7 +1,8 @@
 """Gera os cenários de demanda sintética (carros, motos e ônibus) com o randomTrips do SUMO.
 
 Conjuntos:
-- treino: cada cenário tem uma semente e uma escala de volume sorteada entre 0,8 e 1,2;
+- treino: cada cenário tem uma semente e uma escala de volume sorteada entre --treino-min e
+  --treino-max (padrão 0,6 a 1,6), para o agente aprender também com trânsito leve e pesado;
 - validacao: usado durante o treino para guardar o melhor modelo;
 - teste: só para a comparação final, o agente nunca treina nele.
 
@@ -81,28 +82,37 @@ def gerar_cenario(nome: str, semente: int, escala: float, duracao: int, sumo_hom
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--treino", type=int, default=10, help="número de cenários de treino")
+    p.add_argument("--treino", type=int, default=20, help="número de cenários de treino")
+    p.add_argument("--treino-min", type=float, default=0.6, help="menor volume de treino (fração do calibrado)")
+    p.add_argument("--treino-max", type=float, default=1.6, help="maior volume de treino (fração do calibrado)")
     p.add_argument("--validacao", type=int, default=1)
     p.add_argument("--teste", type=int, default=5)
     p.add_argument("--duracao", type=int, default=3600, help="segundos com chegada de veículos")
     p.add_argument("--semente", type=int, default=0)
-    p.add_argument("--escala-global", type=float, default=1.0,
-                   help="multiplica o volume de todos os cenários; use o valor sugerido pelo diagnosticar.py")
+    p.add_argument("--escala-global", type=float, default=None,
+                   help="multiplica o volume de todos os cenários; use o valor sugerido pelo diagnosticar.py "
+                        "(se omitido, repete o da demanda atual, ou 1,0 se ainda não houver)")
     p.add_argument("--sem-ponderar", action="store_true",
                    help="sorteia origens e destinos sem favorecer as avenidas (comportamento antigo)")
     args = p.parse_args()
 
     if not REDE.exists():
         raise SystemExit(f"Rede não encontrada: {REDE}")
+    if args.escala_global is None:
+        anterior = json.loads(MANIFESTO.read_text(encoding="utf-8")) if MANIFESTO.exists() else {}
+        args.escala_global = float(anterior.get("escala_global", 1.0))
+        print(f"Escala global {args.escala_global:g} (a mesma da demanda atual; mude com --escala-global)")
     sumo_home = preparar_sumo()
     rng = np.random.default_rng(args.semente)
     ponderar = not args.sem_ponderar
     manifesto = {"duracao_demanda": args.duracao, "escala_global": args.escala_global,
-                 "ponderar_vias": ponderar, "treino": [], "validacao": [], "teste": []}
+                 "ponderar_vias": ponderar, "volume_treino": [args.treino_min, args.treino_max],
+                 "treino": [], "validacao": [], "teste": []}
 
     g = args.escala_global
     planos = (
-        [("treino", f"treino_s{i:03d}", i, g * float(rng.uniform(0.8, 1.2))) for i in range(1, args.treino + 1)]
+        [("treino", f"treino_s{i:03d}", i, g * float(rng.uniform(args.treino_min, args.treino_max)))
+         for i in range(1, args.treino + 1)]
         + [("validacao", f"validacao_s{50 + i:03d}", 50 + i, g) for i in range(1, args.validacao + 1)]
         + [("teste", f"teste_s{100 + i:03d}", 100 + i, g) for i in range(1, args.teste + 1)]
     )

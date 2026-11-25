@@ -1,6 +1,7 @@
 """Testes dos scripts de apoio (diagnóstico e geração de demanda), sem precisar do SUMO."""
 from __future__ import annotations
 
+import io
 import subprocess
 import sys
 import tempfile
@@ -207,7 +208,8 @@ class TestAmbienteComZonas(unittest.TestCase):
             self.assertEqual(MaxPressao()(env, None), {"cruz": 0})
             self.assertEqual(env._fila("cruz"), 11.0)
             obs = env._observar("cruz")
-            # [fase0, fase1, pode_trocar, dens_norte, dens_leste, fila_norte, fila_leste, saida_norte, saida_leste]
+            # [fase0, fase1, pode_trocar, dens_norte, dens_leste, fila_norte, fila_leste, saida_norte, saida_leste,
+            #  espera_norte, espera_leste]
             self.assertAlmostEqual(float(obs[3]), 0.7, places=5)  # 7 veículos / 10 de capacidade
             env.fechar()
 
@@ -230,5 +232,97 @@ class TestPressaoComSaidaCheia(unittest.TestCase):
         sim.n["norte_out"] = 0
         env._ler_faixas()
         self.assertEqual(MaxPressao()(env, None), {"cruz": 0})
-        self.assertAlmostEqual(float(env._observar("cruz")[-2]), 0.0)
+        self.assertAlmostEqual(float(env._observar("cruz")[7]), 0.0)  # ocupação da saída norte
         env.fechar()
+
+
+# ---------------------------------------------------------------------- investigação de colapsos
+import investigar  # noqa: E402
+
+
+class SempreFase0:
+    """Política teimosa: só quer a fase 0. O verde máximo é que obriga a abrir a outra."""
+
+    controla = True
+
+    def __call__(self, env, obs):
+        return {a: 0 for a in env.agentes}
+
+
+class TestInvestigar(unittest.TestCase):
+    def test_aponta_faixa_sem_verde_e_trocas_forcadas(self):
+        cenario = {"nome": "falso", "semente": 0, "rotas": []}
+        original = investigar.AmbienteGavea
+
+        def ambiente_falso(rede, rotas, **kw):
+            return original("rede.net.xml", rotas, conectar=lambda env: SumoFalso(chegadas=(0.3, 0.3)), **kw)
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(investigar, "AmbienteGavea", ambiente_falso):
+            r = investigar.rodar(SempreFase0(), cenario, 1.0, 600, Path(tmp) / "rodada")
+            self.assertGreater(r["semaforos"]["cruz"]["forcadas"], 0)
+            espera, _, parados = r["rastreador"].pior_espera[("cruz", "leste_in")]
+            self.assertGreaterEqual(espera, 85)  # leste espera o verde máximo inteiro da fase 0
+            self.assertGreater(parados, 0)
+            self.assertNotIn(("cruz", "norte_in"), {k for k, v in r["rastreador"].pior_espera.items() if v[0] > 30})
+            self.assertEqual(len(r["rastreador"].registros), 600 // 5)
+
+    def test_le_pasta_de_validacao(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            (base / "rede.net.xml").write_text(REDE_MINI, encoding="utf-8")
+            (base / "mapa.osm.xml").write_text(OSM_MINI, encoding="utf-8")
+            pasta = base / "ep1495"
+            pasta.mkdir()
+            (pasta / "tripinfo.xml").write_text("""<tripinfos>
+                <tripinfo id="carro_1" departLane="111#2_0" arrival="300" timeLoss="20"/>
+                <tripinfo id="carro_2" departLane="222-AddedOnRampEdge_0" arrival="-1" timeLoss="900"/>
+                <tripinfo id="carro_3" departLane="222-AddedOnRampEdge_0" arrival="800" timeLoss="500"/>
+            </tripinfos>""", encoding="utf-8")
+            loc = diagnosticar.Localizador(base / "rede.net.xml", base / "mapa.osm.xml")
+            saida = io.StringIO()
+            with mock.patch("sys.stdout", saida):
+                investigar.ler_pasta(pasta, loc, 5)
+            texto = saida.getvalue()
+            self.assertIn("1 não terminaram", texto)
+            primeira = [l for l in texto.splitlines() if "Avenida Dois" in l or "Rua Um" in l][0]
+            self.assertIn("Avenida Dois", primeira)  # a rua com mais atraso aparece primeiro
+
+
+class TestVermelhoMaximo(unittest.TestCase):
+    """Uma política que só quer a fase 0 não pode deixar o leste esperando para sempre."""
+
+    def _rodar(self, **kw):
+        sims = []
+
+        def conectar(env):
+            sims.append(SumoFalso(chegadas=(0.3, 0.1)))
+            return sims[-1]
+
+        env = AmbienteGavea("rede.net.xml", [], conectar=conectar, duracao=900, **kw)
+        rastreador = investigar.Rastreador(SempreFase0())
+        obs = env.reset()
+        rastreador.preparar(env)
+        fim, maior_espera_obs = False, 0.0
+        while not fim:
+            obs, _, fim, _ = env.step(rastreador(env, obs))
+            maior_espera_obs = max(maior_espera_obs, float(obs["cruz"][-1]))
+        s = env.semaforos["cruz"]
+        resumo = env.fechar()
+        verdes_leste = [t for t, tl, estado in sims[-1].historico if tl == "cruz" and estado == "rG"]
+        pior = rastreador.pior_espera.get(("cruz", "leste_in"), (0.0, 0.0, 0.0))[0]
+        return s, resumo, verdes_leste, maior_espera_obs, pior
+
+    def test_sem_limites_o_leste_nunca_abre(self):
+        _, _, verdes_leste, _, pior = self._rodar(verde_max=0, vermelho_max=0)
+        self.assertEqual(verdes_leste, [])
+        self.assertGreater(pior, 800)
+
+    def test_vermelho_maximo_obriga_a_abrir(self):
+        s, resumo, verdes_leste, maior_espera_obs, pior = self._rodar(verde_max=0, vermelho_max=60)
+        self.assertGreater(s.por_espera, 0)
+        self.assertEqual(resumo["trocas_por_espera"], s.por_espera)
+        self.assertTrue(verdes_leste)
+        # quem espera aparece na observação, chegando a 1 quando bate o vermelho máximo
+        self.assertAlmostEqual(maior_espera_obs, 1.0)
+        # carro parado no leste espera no máximo o vermelho máximo + uma decisão + o amarelo (+ folga da medição)
+        self.assertLessEqual(pior, 60 + 5 + 3 + 5)

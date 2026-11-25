@@ -59,3 +59,30 @@ def rotas_do_conjunto(manifesto: dict, nome: str) -> list[dict]:
     for c in manifesto[nome]:
         cenarios.append({**c, "rotas": [str(DEMANDA / r) for r in c["rotas"]]})
     return cenarios
+
+
+class _Espelho:
+    """Escreve no terminal e num arquivo ao mesmo tempo."""
+
+    def __init__(self, original, arquivo):
+        self.original, self.arquivo = original, arquivo
+
+    def write(self, texto):
+        self.original.write(texto)
+        self.arquivo.write(texto)
+        return len(texto)
+
+    def flush(self):
+        self.original.flush()
+        self.arquivo.flush()
+
+    def __getattr__(self, nome):
+        return getattr(self.original, nome)
+
+
+def espelhar_saida(caminho: Path) -> Path:
+    """Daqui em diante, tudo o que o script imprimir também vai para `caminho`."""
+    caminho = Path(caminho)
+    caminho.parent.mkdir(parents=True, exist_ok=True)
+    sys.stdout = _Espelho(sys.stdout, caminho.open("a", encoding="utf-8"))
+    return caminho

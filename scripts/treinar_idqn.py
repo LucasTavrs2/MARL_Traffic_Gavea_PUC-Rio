@@ -11,6 +11,8 @@ Salva na pasta de --saida (padrão resultados/idqn):
 - ultimo.npz, melhor.npz           só as redes, para o avaliar.py
 - checkpoint.npz                   tudo para continuar (redes, otimizador, memória de replay, contadores)
 - checkpoint_melhor.npz            o mesmo, no episódio que teve o melhor resultado na validação
+- colapsos/epNNNN.npz              redes de cada validação que ficou acima do dobro do melhor resultado,
+                                   para investigar com: python scripts/investigar.py --modelo <arquivo>
 
 O checkpoint é gravado ao fim de cada episódio. Ctrl+C perde só o episódio em andamento.
 """
@@ -34,9 +36,10 @@ from marl_gavea.comum import REDE, RESULTADOS, carregar_manifesto, rotas_do_conj
 from marl_gavea.idqn import AgenteDQN, carregar_checkpoint, salvar_checkpoint, salvar_modelo  # noqa: E402
 
 COLUNAS = [
-    "episodio", "cenario", "epsilon", "recompensa", "perda_media", "segundos",
+    "episodio", "cenario", "escala", "epsilon", "recompensa", "perda_media", "segundos",
     "tempo_perdido_medio_s", "espera_media_s", "tempo_viagem_medio_s", "pct_concluidos",
     "veiculos", "concluidos", "nao_inseridos", "teleportes", "fila_media_veic", "trocas_de_fase",
+    "trocas_forcadas", "trocas_por_espera",
     "tempo_perdido_carros_s", "tempo_perdido_motos_s", "tempo_perdido_onibus_s",
 ]
 DELTA = 5
@@ -132,6 +135,8 @@ def main() -> None:
     p.add_argument("--duracao", type=int, default=4200, help="segundos simulados por episódio")
     p.add_argument("--recompensa", choices=["fila", "espera"], default="fila")
     p.add_argument("--avaliar-cada", type=int, default=5, help="avalia na validação a cada N episódios")
+    p.add_argument("--validacao-escalas", nargs="+", type=float, default=[1.0, 1.5],
+                   help="volumes da validação; o melhor modelo é o de menor média entre eles (padrão: 1.0 e 1.5)")
     p.add_argument("--exploracao", type=float, default=0.5,
                    help="fração do treino em que o epsilon cai de 1,0 até 0,05 (só vale em treino novo)")
     p.add_argument("--lr", type=float, default=5e-4)
@@ -216,17 +221,33 @@ def main() -> None:
 
             melhorou = False
             if (ep + 1) % args.avaliar_cada == 0 or ep + 1 == args.episodios:
-                env_val = AmbienteGavea(REDE, validacao["rotas"], duracao=args.duracao, delta=DELTA,
-                                        recompensa=args.recompensa, semente=validacao["semente"],
-                                        saida=saida / "validacao" / f"ep{ep + 1:03d}")
-                r_val = rodar_episodio(env_val, gulosa)
-                anexar_csv(saida / "validacao.csv", {"episodio": ep + 1, "cenario": validacao["nome"], **r_val})
-                chave, valor = criterio(r_val)
+                valores = []
+                for escala in args.validacao_escalas:
+                    pasta_val = saida / "validacao" / f"ep{ep + 1:03d}"
+                    if len(args.validacao_escalas) > 1:
+                        pasta_val = pasta_val / f"volume_{escala:g}"
+                    env_val = AmbienteGavea(REDE, validacao["rotas"], duracao=args.duracao, delta=DELTA,
+                                            recompensa=args.recompensa, semente=validacao["semente"],
+                                            saida=pasta_val, escala=escala)
+                    r_val = rodar_episodio(env_val, gulosa)
+                    anexar_csv(saida / "validacao.csv",
+                               {"episodio": ep + 1, "cenario": validacao["nome"], "escala": escala, **r_val})
+                    chave, v = criterio(r_val)
+                    valores.append(v)
+                valor = float(np.mean(valores))
+                colapsou = math.isfinite(melhor) and valor > 2 * melhor
                 melhorou = valor < melhor or not (saida / "melhor.npz").exists()
                 if melhorou:
                     melhor = valor
-                print(f"   validação: {chave} = {valor:.1f}{'  <- melhor até agora' if melhorou else ''}",
+                detalhe = ""
+                if len(valores) > 1:
+                    detalhe = " (" + ", ".join(f"{e * 100:.0f}%: {v:.1f}" for e, v in zip(args.validacao_escalas, valores)) + ")"
+                print(f"   validação: {chave} = {valor:.1f}{detalhe}{'  <- melhor até agora' if melhorou else ''}",
                       flush=True)
+                if colapsou:
+                    arquivo = saida / "colapsos" / f"ep{ep + 1:04d}.npz"
+                    salvar_modelo(arquivo, agentes, {"episodio": ep + 1, "validacao": valor})
+                    print(f"   colapso na validação: redes guardadas em {arquivo}", flush=True)
 
             salvar_modelo(saida / "ultimo.npz", agentes, {"episodio": ep + 1})
             salvar_checkpoint(saida / "checkpoint.npz", agentes, info_checkpoint(ep + 1))

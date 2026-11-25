@@ -3,7 +3,12 @@
 Regras de segurança aplicadas a qualquer controlador (aleatório, max-pressure, IDQN):
 - toda troca de fase passa por amarelo;
 - uma fase verde dura pelo menos `verde_min` segundos;
-- uma fase verde dura no máximo `verde_max` segundos (depois disso a troca é forçada).
+- uma fase verde dura no máximo `verde_max` segundos (depois disso a troca é forçada);
+- nenhuma faixa com carros parados fica mais de `vermelho_max` segundos sem verde: passado esse
+  tempo, a próxima troca vai obrigatoriamente para uma fase que a atende.
+Nas trocas forçadas (verde máximo ou vermelho máximo), a fase escolhida é a que atende a faixa que
+espera há mais tempo, e não simplesmente a seguinte; senão, fases que só atendem um movimento
+pequeno podiam nunca ser alcançadas.
 
 Semáforos com uma única fase verde (por exemplo, travessias de pedestre no meio da quadra)
 não viram agentes: continuam rodando o programa original do SUMO em todos os métodos.
@@ -12,7 +17,8 @@ Fila, densidade e pressão são medidas numa zona de cerca de 100 m antes (e dep
 semáforo, e não só na faixa que encosta nele, que muitas vezes tem poucos metros (veja zonas.py).
 
 Observação de cada agente: fase atual (one-hot), se já pode trocar, e, por faixa, densidade e fila
-na zona de entrada e densidade na zona de saída (para enxergar quando a via à frente está cheia).
+na zona de entrada, densidade na zona de saída (para enxergar quando a via à frente está cheia) e
+há quanto tempo cada faixa de entrada com carros parados está sem verde (em frações do vermelho máximo).
 """
 from __future__ import annotations
 
@@ -42,6 +48,10 @@ class Semaforo:
     fim_amarelo: float | None = None
     destino: int | None = None
     trocas: int = 0
+    forcadas: int = 0  # trocas impostas pelo verde máximo
+    por_espera: int = 0  # trocas impostas pelo vermelho máximo
+    servidas: list = field(default_factory=list)  # por fase verde: faixas de entrada que ela libera
+    ultimo_verde: dict = field(default_factory=dict)  # faixa de entrada -> último instante com verde ou sem fila
     zona_entrada: dict = field(default_factory=dict)  # faixa de entrada -> faixas da zona antes do semáforo
     zona_saida: dict = field(default_factory=dict)  # faixa de saída -> faixas da zona depois do semáforo
     cap_zona: dict = field(default_factory=dict)  # faixa de entrada -> veículos que cabem na zona
@@ -97,12 +107,15 @@ class AmbienteGavea:
         amarelo: int = 3,
         verde_min: int = 10,
         verde_max: int = 90,
+        vermelho_max: int = 120,
         recompensa: str = "fila",
         controlar: bool = True,
         gui: bool = False,
         semente: int = 0,
         saida=None,
         conectar=None,
+        escala: float = 1.0,
+        avisos: bool = False,
     ):
         if delta <= amarelo:
             raise ValueError("delta precisa ser maior que o tempo de amarelo")
@@ -115,11 +128,14 @@ class AmbienteGavea:
         self.amarelo = amarelo
         self.verde_min = verde_min
         self.verde_max = verde_max
+        self.vermelho_max = vermelho_max
         self.recompensa = recompensa
         self.controlar = controlar
         self.gui = gui
         self.semente = semente
         self.saida = Path(saida) if saida else None
+        self.escala = escala  # multiplica a demanda do cenário (--scale do SUMO), para testes de estresse
+        self.avisos = avisos  # grava os avisos do SUMO (teleportes) em saida/sumo.log
         self._conectar = conectar  # usado nos testes para trocar o SUMO por um simulador falso
         self.conn = None
         self.semaforos: dict[str, Semaforo] = {}
@@ -138,8 +154,14 @@ class AmbienteGavea:
             "--time-to-teleport", "300",
             "--waiting-time-memory", "1000",
             "--no-step-log", "true",
-            "--no-warnings", "true",
         ]
+        if self.escala != 1.0:
+            cmd += ["--scale", f"{self.escala:g}"]
+        if self.avisos and self.saida:
+            self.saida.mkdir(parents=True, exist_ok=True)
+            cmd += ["--log", str(self.saida / "sumo.log")]
+        else:
+            cmd += ["--no-warnings", "true"]
         if self.saida:
             self.saida.mkdir(parents=True, exist_ok=True)
             cmd += [
@@ -159,7 +181,18 @@ class AmbienteGavea:
             import traci
 
             rotulo = f"gavea_{uuid.uuid4().hex[:8]}"
-            traci.start(self._comando(), label=rotulo)
+            if self.avisos and self.saida:
+                # os avisos vão para saida/sumo.log; sem isso o SUMO também os despeja no terminal
+                import subprocess
+
+                from sumolib.miscutils import getFreeSocketPort
+
+                porta = getFreeSocketPort()
+                processo = subprocess.Popen(self._comando() + ["--remote-port", str(porta)],
+                                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                traci.init(porta, label=rotulo, proc=processo)
+            else:
+                traci.start(self._comando(), label=rotulo)
             self.conn = traci.getConnection(rotulo)
 
         todos = descobrir_semaforos(self.conn)
@@ -168,17 +201,24 @@ class AmbienteGavea:
         self.agentes = sorted(self.semaforos)
         self.n_acoes = {a: self.semaforos[a].n_fases for a in self.agentes}
         self.dim_obs = {
-            a: self.semaforos[a].n_fases + 1 + 2 * len(self.semaforos[a].entradas) + len(self.semaforos[a].saidas)
+            a: self.semaforos[a].n_fases + 1 + 3 * len(self.semaforos[a].entradas) + len(self.semaforos[a].saidas)
             for a in self.agentes
         }
         self._montar_zonas()
 
         t = self.conn.simulation.getTime()
         for s in self.semaforos.values():
-            s.fase, s.inicio_verde, s.fim_amarelo, s.destino, s.trocas = 0, t, None, None, 0
+            s.fase, s.inicio_verde, s.fim_amarelo, s.destino, s.trocas, s.forcadas = 0, t, None, None, 0, 0
+            s.por_espera = 0
+            s.ultimo_verde = {f: t for f in s.entradas}
+            s.servidas = [
+                {s.links[i][0] for i, c in enumerate(estado) if c in "Gg" and i < len(s.links) and s.links[i]}
+                for estado in s.fases
+            ]
             if self.controlar:
                 self.conn.trafficlight.setRedYellowGreenState(s.id, s.fases[0])
         self._ler_faixas()
+        self._atualizar_esperas(t)
         self._espera_anterior = {a: self._espera_total(a) for a in self.agentes}
         self._soma_fila = 0.0
         self._decisoes = 0
@@ -196,6 +236,8 @@ class AmbienteGavea:
             resumo["fila_media_veic"] = self._soma_fila / self._decisoes
         if self.semaforos:
             resumo["trocas_de_fase"] = sum(s.trocas for s in self.semaforos.values())
+            resumo["trocas_forcadas"] = sum(s.forcadas for s in self.semaforos.values())
+            resumo["trocas_por_espera"] = sum(s.por_espera for s in self.semaforos.values())
         return resumo
 
     # ------------------------------------------------------------------ passo
@@ -219,6 +261,7 @@ class AmbienteGavea:
                 break
 
         self._ler_faixas()
+        self._atualizar_esperas(t)
         obs = {a: self._observar(a) for a in self.agentes}
         recompensas = {a: self._recompensa(a) for a in self.agentes}
         fila = sum(self._fila(a) for a in self.agentes)
@@ -232,12 +275,57 @@ class AmbienteGavea:
         if s.fim_amarelo is not None:
             return  # já está trocando
         tempo_verde = t - s.inicio_verde
-        if acao == s.fase and self.verde_max and tempo_verde >= self.verde_max:
-            acao = (s.fase + 1) % s.n_fases
-        if acao != s.fase and tempo_verde >= self.verde_min:
+        if tempo_verde < self.verde_min:
+            return
+        famintas = self._famintas(s, t)
+        if famintas:
+            if not famintas & s.servidas[acao]:
+                acao = self._fase_mais_esperada(s, t)
+                s.por_espera += 1
+        elif acao == s.fase and self.verde_max and tempo_verde >= self.verde_max:
+            acao = self._fase_mais_esperada(s, t)
+            s.forcadas += 1
+        if acao != s.fase:
             self.conn.trafficlight.setRedYellowGreenState(s.id, s.estado_amarelo(s.fase, acao))
             s.fim_amarelo = t + self.amarelo
             s.destino = acao
+
+    # ------------------------------------------------------------------ espera por verde
+    def _parados(self, s: Semaforo, faixa: str) -> float:
+        return self._soma(self._parado, s.zona_entrada[faixa])
+
+    def _atualizar_esperas(self, t: float) -> None:
+        """Marca as faixas que estão com verde agora ou sem ninguém parado."""
+        if not self.controlar:
+            return
+        for s in self.semaforos.values():
+            abertas = s.servidas[s.fase] if s.fim_amarelo is None else set()
+            for f in s.entradas:
+                if f in abertas or self._parados(s, f) == 0:
+                    s.ultimo_verde[f] = t
+
+    def _famintas(self, s: Semaforo, t: float) -> set:
+        """Faixas com carros parados há `vermelho_max` segundos ou mais sem verde."""
+        if not self.vermelho_max:
+            return set()
+        return {
+            f for f in s.entradas
+            if f not in s.servidas[s.fase] and t - s.ultimo_verde[f] >= self.vermelho_max and self._parados(s, f) > 0
+        }
+
+    def _fase_mais_esperada(self, s: Semaforo, t: float) -> int:
+        """Entre as outras fases, a que atende a faixa com carros parados que espera há mais tempo
+        (desempate: mais carros parados). Sem ninguém esperando, a fase seguinte."""
+        melhor, chave_melhor = (s.fase + 1) % s.n_fases, (-1.0, 0.0)
+        for p in range(s.n_fases):
+            if p == s.fase:
+                continue
+            parados = {f: self._parados(s, f) for f in s.servidas[p]}
+            esperas = [t - s.ultimo_verde[f] for f, n in parados.items() if n > 0]
+            chave = (max(esperas) if esperas else -1.0, sum(parados.values()))
+            if chave > chave_melhor:
+                melhor, chave_melhor = p, chave
+        return melhor
 
     # ------------------------------------------------------------------ zonas de detecção
     def _montar_zonas(self) -> None:
@@ -278,7 +366,10 @@ class AmbienteGavea:
         pode_trocar = [1.0 if t - s.inicio_verde >= self.verde_min else 0.0]
         densidade = [min(1.0, self._soma(self._veic, s.zona_entrada[f]) / s.cap_zona[f]) for f in s.entradas]
         fila = [min(1.0, self._soma(self._parado, s.zona_entrada[f]) / s.cap_zona[f]) for f in s.entradas]
-        return np.concatenate([fase, pode_trocar, densidade, fila, self._densidade_saida(s)]).astype(np.float32)
+        espera = [
+            min(1.0, (t - s.ultimo_verde[f]) / self.vermelho_max) if self.vermelho_max else 0.0 for f in s.entradas
+        ]
+        return np.concatenate([fase, pode_trocar, densidade, fila, self._densidade_saida(s), espera]).astype(np.float32)
 
     def _densidade_saida(self, s: Semaforo) -> list[float]:
         return [min(1.0, self._soma(self._veic, s.zona_saida[f]) / s.cap_saida[f]) for f in s.saidas]

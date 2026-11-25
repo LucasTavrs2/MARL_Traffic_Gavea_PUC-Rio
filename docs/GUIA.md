@@ -80,7 +80,7 @@ python scripts/gerar_demanda.py
 python scripts/diagnosticar.py
 ```
 
-O `gerar_demanda.py` cria 16 cenários em `demanda\`: 10 de treino (volume sorteado entre 80% e 120%), 1 de validação e 5 de teste. As origens e destinos favorecem as vias com mais faixas e mais rápidas (as avenidas), em vez de espalhar viagens igualmente pelas ruas residenciais (`--sem-ponderar` volta ao sorteio uniforme).
+O `gerar_demanda.py` cria 26 cenários em `demanda\`: 20 de treino (volume sorteado entre 60% e 160% do calibrado, para o agente aprender também com trânsito leve e pesado), 1 de validação e 5 de teste. Depois de calibrada, a escala global fica guardada: rodar o script de novo sem `--escala-global` repete a mesma. As origens e destinos favorecem as vias com mais faixas e mais rápidas (as avenidas), em vez de espalhar viagens igualmente pelas ruas residenciais (`--sem-ponderar` volta ao sorteio uniforme).
 
 O volume sintético ainda não vem de contagem real, então ele precisa ser calibrado para a rede escoar. O `diagnosticar.py` roda o atuado com 30% a 100% do volume, mostra onde os veículos ficam presos e termina com uma linha assim:
 
@@ -88,7 +88,7 @@ O volume sintético ainda não vem de contagem real, então ele precisa ser cali
 Regenere a demanda com:  python scripts/gerar_demanda.py --escala-global 0.55
 ```
 
-Rode essa linha e confirme que o volume novo escoa, incluindo os 120% que aparecem no treino:
+Rode essa linha e confirme que o volume novo escoa:
 
 ```powershell
 python scripts/gerar_demanda.py --escala-global 0.55
@@ -96,7 +96,7 @@ python scripts/diagnosticar.py --escalas 0.8 1.0 1.2
 python scripts/checar_ambiente.py
 ```
 
-Com 100% a meta é pelo menos 95% das viagens concluídas e quase nenhum teleporte. Com 120% pode haver alguma fila e poucos teleportes; se passar de algumas dezenas, use uma escala global um pouco menor.
+Com 100% a meta é pelo menos 95% das viagens concluídas e quase nenhum teleporte. Com mais volume a rede começa a saturar, e é de propósito: o treino vai até 160% para o agente aprender a lidar com isso.
 
 Para ver um cenário no sumo-gui:
 
@@ -148,11 +148,12 @@ O `Ctrl+C` interrompe com segurança: perde só o episódio em andamento. Ficam 
 | Arquivo | Conteúdo |
 | --- | --- |
 | `treino.csv` | Uma linha por episódio de treino |
-| `validacao.csv` | Política sem exploração no cenário de validação, a cada 5 episódios |
-| `melhor.npz` | Redes do episódio com menor tempo perdido na validação (para o `avaliar.py`) |
+| `validacao.csv` | Política sem exploração no cenário de validação, com 100% e 150% do volume, a cada 5 episódios |
+| `melhor.npz` | Redes do episódio com menor tempo perdido médio na validação (média dos dois volumes; para o `avaliar.py`) |
 | `ultimo.npz` | Redes do último episódio completo (para o `avaliar.py`) |
 | `checkpoint.npz` | Tudo para continuar: redes, otimizador, memória de replay, epsilon e sorteador |
 | `checkpoint_melhor.npz` | O mesmo, no episódio do melhor resultado na validação |
+| `colapsos\epNNNN.npz` | Redes de cada validação que passou do dobro do melhor resultado (para o `investigar.py`) |
 
 Os dois checkpoints crescem até a memória de replay encher (50 mil transições por semáforo) e podem somar algumas centenas de MB. Eles ficam fora do Git.
 
@@ -177,15 +178,16 @@ O `--episodios` é sempre o **total**, contando os já feitos.
 ## 8.2 Configuração recomendada
 
 1. **Episódio de 4.200 s simulados** (o padrão): uma hora de chegadas, que cobre um pico inteiro, mais 10 minutos para a rede esvaziar. Episódio mais longo deixa cada um mais lento sem trazer variedade: o que ajuda é ter mais episódios em cenários diferentes.
-2. **100 episódios na primeira rodada.** Depois abra o `validacao.csv`: se o tempo perdido ainda estiver caindo nas últimas 4 avaliações (20 episódios), continue até 150 e, se preciso, até 200.
-3. **Para o resultado ser confiável, treine com 3 sementes** e avalie cada uma nos 5 cenários de teste. A rodada padrão já é a semente 0; as outras duas:
+2. **1.000 episódios.** No primeiro treino longo a validação estabilizou por volta do episódio 1.000; 1.500 não trouxe ganho.
+3. **Para o resultado ser confiável, treine com 3 sementes** e avalie cada uma nos 5 cenários de teste e no teste de estresse. Podem rodar ao mesmo tempo, cada uma num terminal:
 
 ```powershell
-python scripts/treinar_idqn.py --episodios 100 --semente 1 --saida resultados\idqn_s1
-python scripts/treinar_idqn.py --episodios 100 --semente 2 --saida resultados\idqn_s2
+python scripts/treinar_idqn.py --episodios 1000 --semente 0 --saida resultados\idqn_s0
+python scripts/treinar_idqn.py --episodios 1000 --semente 1 --saida resultados\idqn_s1
+python scripts/treinar_idqn.py --episodios 1000 --semente 2 --saida resultados\idqn_s2
 ```
 
-Se as três sementes baterem o atuado e o max-pressure, o resultado não foi sorte de uma rodada.
+Se as três sementes baterem o atuado e o max-pressure, inclusive com volume maior, o resultado não foi sorte de uma rodada.
 
 ## 9. Comparação final
 
@@ -198,6 +200,38 @@ Para assistir à política treinada no sumo-gui:
 ```powershell
 python scripts/avaliar.py --metodos idqn --modelo resultados\idqn\melhor.npz --gui
 ```
+
+## 9.1 Teste de estresse
+
+Avalia os métodos com mais volume do que o usado no treino, sem treinar de novo. O volume extra vem
+do `--scale` do SUMO, que duplica parte dos veículos dos cenários de teste.
+
+```powershell
+python scripts/avaliar.py --metodos atuado max_pressao idqn --modelo resultados\idqn\melhor.npz --escalas 1.0 1.25 1.5
+```
+
+Sai uma tabela por volume. O que importa é se o IDQN continua à frente do max-pressure quando o
+trânsito pesa, e se ele trava (tempo perdido e teleportes disparando) antes dos outros.
+
+## 9.2 Investigar um colapso
+
+Roda um método em todos os cenários (treino, validação e teste), marca as rodadas que travaram e
+detalha a pior: fila de cada semáforo ao longo do tempo, a rua que ficou mais tempo sem verde com
+carros esperando, trocas forçadas pelo verde máximo e os pontos de teleporte.
+
+```powershell
+python scripts/investigar.py --modelo resultados\idqn\melhor.npz --escalas 1.0 1.25 1.5
+python scripts/investigar.py --metodo max_pressao --escalas 1.5
+```
+
+Para olhar uma validação que já colapsou durante o treino (as pastas ficam em `resultados\idqn\validacao`):
+
+```powershell
+python scripts/investigar.py --pasta resultados\idqn\validacao\ep1495
+```
+
+Daqui em diante, quando a validação passar do dobro do melhor resultado, o treino guarda as redes daquele momento em
+`colapsos\epNNNN.npz`, e dá para reproduzir o colapso com `--modelo resultados\idqn\colapsos\epNNNN.npz --conjuntos validacao`.
 
 ## 10. Subir o código
 
@@ -225,8 +259,11 @@ No `git status`, confira que não aparecem `.venv`, `demanda` nem `resultados`.
 | Intervalo entre decisões | 5 s |
 | Amarelo | 3 s |
 | Verde mínimo e máximo | 10 s e 90 s |
+| Vermelho máximo | 120 s: faixa com carros parados há 120 s sem verde é atendida na troca seguinte (vale para aleatório, max-pressure e IDQN) |
+| Troca forçada | Vai para a fase que atende a faixa que espera há mais tempo, não para a fase seguinte |
 | Zona de detecção | Até 100 m antes de cada semáforo (parando no semáforo anterior) e até o próximo semáforo depois dele; o OSM corta as vias em trechos de poucos metros, então olhar só a faixa que encosta no semáforo esconderia a fila |
-| Observação | Fase atual, se já pode trocar, densidade e fila na zona de cada faixa de entrada, densidade na zona de cada faixa de saída |
+| Observação | Fase atual, se já pode trocar, densidade, fila e tempo sem verde na zona de cada faixa de entrada, densidade na zona de cada faixa de saída |
+| Volume no treino | 20 cenários entre 60% e 160% do volume calibrado; validação com 100% e 150% |
 | Max-pressure | Pressão normalizada pela capacidade (ocupação da entrada menos ocupação da saída), mantém a fase atual em empate |
 | Recompensa | Veículos parados na zona antes do semáforo (`--recompensa espera` usa o tempo de espera) |
 | Episódio | 4.200 s: 3.600 s de chegadas mais 600 s para esvaziar |
