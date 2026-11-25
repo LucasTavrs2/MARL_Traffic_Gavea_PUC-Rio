@@ -1,0 +1,211 @@
+# Guia: do clone ao primeiro treino
+
+Passo a passo para rodar no Windows (PowerShell), do repositório vazio até a comparação do IDQN com os baselines.
+
+O treino usa **demanda sintética**. O resultado mostra se o ambiente e o algoritmo funcionam, não o ganho real na Gávea: isso só vem com os dados de contagem (Fase 3 do roadmap).
+
+## O que vem no pacote
+
+| Pasta ou arquivo | Para que serve |
+| --- | --- |
+| `marl_gavea/` | Ambiente sobre o SUMO, baselines, IDQN e leitura de métricas |
+| `scripts/checar_ambiente.py` | Confere a instalação e lista os semáforos que viram agentes |
+| `scripts/gerar_demanda.py` | Gera os cenários de carros, motos e ônibus |
+| `scripts/avaliar.py` | Compara os métodos nos mesmos cenários |
+| `scripts/treinar_idqn.py` | Treina o IDQN |
+| `tests/` | Testes que rodam sem o SUMO |
+| `requirements.txt`, `.gitignore` | Versões atualizadas (substituem as antigas) |
+
+## 1. Clonar o repositório
+
+```powershell
+cd $env:USERPROFILE\Desktop
+git clone https://github.com/LucasTavrs2/MARL_Traffic_Gavea_PUC-Rio.git
+cd MARL_Traffic_Gavea_PUC-Rio
+git config user.name "Lucas Tavares"
+git config user.email "lucastavrs2@gmail.com"
+dir maps\gavea_real
+```
+
+A pasta `maps\gavea_real` precisa ter `gavea.net.xml`, `tls_grupos.nod.xml`, `gavea.osm.xml` e `build.ps1`. Se estiver vazia, o push do PC do trabalho não foi feito.
+
+## 2. Criar o ambiente Python
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+```
+
+Se o PowerShell recusar o `Activate.ps1`, libere scripts só para o seu usuário e tente de novo:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
+
+## 3. Colocar o pacote e instalar
+
+Com o `.venv` ativo e na raiz do repositório:
+
+```powershell
+Expand-Archive "$env:USERPROFILE\Downloads\pacote_treino_gavea.zip" -DestinationPath . -Force
+pip install -r requirements.txt
+python -m unittest discover -s tests -v
+```
+
+Os 12 testes devem terminar com `OK`. Eles usam um cruzamento falso, então não dependem do SUMO.
+
+Os scripts acham o SUMO sozinhos. Só precisa do `$env:SUMO_HOME` se for chamar ferramentas do SUMO direto no terminal.
+
+## 4. Conferir o ambiente
+
+```powershell
+python scripts/checar_ambiente.py
+```
+
+Mostra a tabela de semáforos, quantas fases verdes cada um tem e quais viram agentes. Semáforos com uma fase verde só, como travessias no meio da quadra, ficam no programa original em todos os métodos, para a comparação ser justa.
+
+## 5. Gerar a demanda
+
+```powershell
+python scripts/gerar_demanda.py
+python scripts/checar_ambiente.py
+```
+
+Cria 16 cenários em `demanda\`: 10 de treino (volume sorteado entre 80% e 120%), 1 de validação e 5 de teste. A segunda checagem roda 2 minutos já com carros.
+
+Para ver um cenário no sumo-gui:
+
+```powershell
+sumo-gui -n maps\gavea_real\gavea.net.xml -r demanda\teste_s101\carro.rou.xml,demanda\teste_s101\moto.rou.xml,demanda\teste_s101\onibus.rou.xml
+```
+
+## 6. Rodar os baselines
+
+```powershell
+python scripts/avaliar.py
+```
+
+Roda atuado, aleatório e max-pressure nos 5 cenários de teste (15 simulações) e imprime o resumo. Os arquivos vão para `resultados\avaliacao\<data_hora>\`.
+
+## 7. Treino de teste
+
+```powershell
+python scripts/treinar_idqn.py --episodios 3 --avaliar-cada 1 --saida resultados\idqn_teste
+```
+
+Anote os segundos por episódio que aparecem na tela. Eles dão a estimativa do treino longo: segundos por episódio × 120 (100 episódios mais as 20 validações).
+
+## 8. Treino longo
+
+Antes, deixe o PC sem suspender:
+
+```powershell
+powercfg /change standby-timeout-ac 0
+python scripts/treinar_idqn.py --episodios 100
+```
+
+Depois do treino, volte a suspensão para o valor que usava (por exemplo, `powercfg /change standby-timeout-ac 30`).
+
+O `Ctrl+C` interrompe com segurança: perde só o episódio em andamento. Ficam salvos em `resultados\idqn\`:
+
+| Arquivo | Conteúdo |
+| --- | --- |
+| `treino.csv` | Uma linha por episódio de treino |
+| `validacao.csv` | Política sem exploração no cenário de validação, a cada 5 episódios |
+| `melhor.npz` | Redes do episódio com menor tempo perdido na validação (para o `avaliar.py`) |
+| `ultimo.npz` | Redes do último episódio completo (para o `avaliar.py`) |
+| `checkpoint.npz` | Tudo para continuar: redes, otimizador, memória de replay, epsilon e sorteador |
+| `checkpoint_melhor.npz` | O mesmo, no episódio do melhor resultado na validação |
+
+Os dois checkpoints crescem até a memória de replay encher (50 mil transições por semáforo) e podem somar algumas centenas de MB. Eles ficam fora do Git.
+
+## 8.1 Continuar, voltar ao melhor ou recomeçar
+
+O `--episodios` é sempre o **total**, contando os já feitos.
+
+| Situação | Comando |
+| --- | --- |
+| Parou no meio (Ctrl+C, queda de luz) | `python scripts/treinar_idqn.py --episodios 100 --continuar` |
+| Terminou os 100 e a validação ainda estava melhorando | `python scripts/treinar_idqn.py --episodios 150 --continuar` |
+| A validação piorou depois de um pico | `python scripts/treinar_idqn.py --episodios 150 --continuar melhor` |
+| Não ficou bom e quer começar do zero | `python scripts/treinar_idqn.py --episodios 100 --recomecar` |
+| Quer manter um treino e testar outro em paralelo | `python scripts/treinar_idqn.py --episodios 100 --saida resultados\idqn_espera --recompensa espera` |
+
+- **Continuar** segue com tudo como estava: a memória de replay, a taxa de exploração e os contadores. O resultado é idêntico ao de um treino que nunca parou (isso está coberto por teste).
+- **Continuar do melhor** volta ao checkpoint do melhor episódio. As linhas posteriores saem do `treino.csv` e do `validacao.csv`, e os arquivos originais ficam salvos com o sufixo `_antes_de_<data>`.
+- **Recomeçar** não apaga nada: renomeia a pasta antiga para `idqn_antigo_<data>`.
+- Ao estender um treino, o epsilon já está no mínimo (0,05). Os episódios extras servem para refinar a política, não para explorar de novo.
+- A duração do episódio e a recompensa ficam as do treino original, mesmo que você passe outros valores.
+
+## 8.2 Configuração recomendada
+
+1. **Episódio de 4.200 s simulados** (o padrão): uma hora de chegadas, que cobre um pico inteiro, mais 10 minutos para a rede esvaziar. Episódio mais longo deixa cada um mais lento sem trazer variedade: o que ajuda é ter mais episódios em cenários diferentes.
+2. **100 episódios na primeira rodada.** Depois abra o `validacao.csv`: se o tempo perdido ainda estiver caindo nas últimas 4 avaliações (20 episódios), continue até 150 e, se preciso, até 200.
+3. **Para o resultado ser confiável, treine com 3 sementes** e avalie cada uma nos 5 cenários de teste. A rodada padrão já é a semente 0; as outras duas:
+
+```powershell
+python scripts/treinar_idqn.py --episodios 100 --semente 1 --saida resultados\idqn_s1
+python scripts/treinar_idqn.py --episodios 100 --semente 2 --saida resultados\idqn_s2
+```
+
+Se as três sementes baterem o atuado e o max-pressure, o resultado não foi sorte de uma rodada.
+
+## 9. Comparação final
+
+```powershell
+python scripts/avaliar.py --metodos atuado aleatorio max_pressao idqn --modelo resultados\idqn\melhor.npz
+```
+
+Para assistir à política treinada no sumo-gui:
+
+```powershell
+python scripts/avaliar.py --metodos idqn --modelo resultados\idqn\melhor.npz --gui
+```
+
+## 10. Subir o código
+
+```powershell
+git add .
+git status
+git commit -m "Ambiente de treino: baselines e IDQN"
+git push
+```
+
+No `git status`, confira que não aparecem `.venv`, `demanda` nem `resultados`.
+
+## Como ler os resultados
+
+- **Tempo perdido médio** é a métrica principal: segundos que cada veículo perdeu em relação a andar livre.
+- **Teleportes** acima de zero indicam travamento: o SUMO remove um veículo parado há 300 s. Se até o atuado tiver muitos, a demanda está pesada demais para a rede.
+- **Concluídos %** é a fração de veículos que chegou ao destino dentro do episódio.
+- **Sucesso**: o IDQN abaixo do atuado e do max-pressure no tempo perdido, sem mais teleportes. Bater o aleatório não basta.
+- **Curva de aprendizado**: abra `treino.csv` no Excel e veja o `tempo_perdido_medio_s` cair conforme o `epsilon` desce.
+
+## Parâmetros usados
+
+| Parâmetro | Valor |
+| --- | --- |
+| Intervalo entre decisões | 5 s |
+| Amarelo | 3 s |
+| Verde mínimo e máximo | 10 s e 90 s |
+| Recompensa | Fila nas faixas de entrada (`--recompensa espera` usa o tempo de espera) |
+| Episódio | 4.200 s: 3.600 s de chegadas mais 600 s para esvaziar |
+| Mistura de veículos | Cerca de 80% carros, 15% motos e 5% ônibus (provisória) |
+| IDQN | Double DQN por semáforo, rede 64×64, replay de 50 mil, epsilon de 1,0 a 0,05 na primeira metade do treino |
+
+## Problemas comuns
+
+| Mensagem | O que fazer |
+| --- | --- |
+| `SUMO não encontrado` | Ative o `.venv` e rode `pip install -r requirements.txt` |
+| `randomTrips falhou` | Mande a saída inteira para análise |
+| `O modelo não bate com a rede` | A rede ou o `tls_grupos.nod.xml` mudou depois do treino: treine de novo |
+| `A pasta ... já tem um treino` | Escolha `--continuar`, `--continuar melhor`, `--recomecar` ou outra `--saida` |
+| `O checkpoint não bate com a rede atual` | A rede mudou depois do treino: use `--recomecar` |
+| Erro de conexão com o TraCI | Feche janelas abertas do sumo-gui e rode de novo |
+
+## O que mandar depois
+
+1. A saída do `checar_ambiente.py` com a demanda já gerada.
+2. O resumo do `avaliar.py` com os baselines.
+3. Os segundos por episódio do treino de teste.

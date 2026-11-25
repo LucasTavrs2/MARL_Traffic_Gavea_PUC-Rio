@@ -1,0 +1,249 @@
+"""Treina o IDQN (um Double DQN por semáforo) nos cenários de treino.
+
+Três modos:
+  python scripts/treinar_idqn.py --episodios 100                       treino novo
+  python scripts/treinar_idqn.py --episodios 200 --continuar           continua do último episódio até o 200
+  python scripts/treinar_idqn.py --episodios 200 --continuar melhor    continua a partir do melhor da validação
+  python scripts/treinar_idqn.py --episodios 100 --recomecar           guarda o treino antigo e começa do zero
+
+Salva na pasta de --saida (padrão resultados/idqn):
+- treino.csv, validacao.csv        métricas por episódio
+- ultimo.npz, melhor.npz           só as redes, para o avaliar.py
+- checkpoint.npz                   tudo para continuar (redes, otimizador, memória de replay, contadores)
+- checkpoint_melhor.npz            o mesmo, no episódio que teve o melhor resultado na validação
+
+O checkpoint é gravado ao fim de cada episódio. Ctrl+C perde só o episódio em andamento.
+"""
+from __future__ import annotations
+
+import argparse
+import csv
+import math
+import shutil
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import numpy as np  # noqa: E402
+
+from marl_gavea.ambiente import AmbienteGavea, rodar_episodio  # noqa: E402
+from marl_gavea.comum import REDE, RESULTADOS, carregar_manifesto, rotas_do_conjunto  # noqa: E402
+from marl_gavea.idqn import AgenteDQN, carregar_checkpoint, salvar_checkpoint, salvar_modelo  # noqa: E402
+
+COLUNAS = [
+    "episodio", "cenario", "epsilon", "recompensa", "perda_media", "segundos",
+    "tempo_perdido_medio_s", "espera_media_s", "tempo_viagem_medio_s", "pct_concluidos",
+    "veiculos", "concluidos", "nao_inseridos", "teleportes", "fila_media_veic", "trocas_de_fase",
+    "tempo_perdido_carros_s", "tempo_perdido_motos_s", "tempo_perdido_onibus_s",
+]
+DELTA = 5
+
+
+def criterio(resumo: dict) -> tuple[str, float]:
+    """Métrica usada para escolher o melhor modelo: tempo perdido médio; se faltar, fila média."""
+    for chave in ("tempo_perdido_medio_s", "fila_media_veic"):
+        valor = resumo.get(chave)
+        if isinstance(valor, (int, float)) and math.isfinite(valor):
+            return chave, float(valor)
+    return "nenhuma", float("inf")
+
+
+def anexar_csv(caminho: Path, linha: dict) -> None:
+    novo = not caminho.exists()
+    with caminho.open("a", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=COLUNAS, extrasaction="ignore", restval="")
+        if novo:
+            w.writeheader()
+        w.writerow({k: (round(v, 4) if isinstance(v, float) else v) for k, v in linha.items()})
+
+
+def cortar_csv(caminho: Path, ate_episodio: int, carimbo: str) -> None:
+    """Ao continuar de um episódio anterior, tira do CSV as linhas posteriores (guardando uma cópia)."""
+    if not caminho.exists():
+        return
+    with caminho.open(encoding="utf-8") as f:
+        linhas = list(csv.DictReader(f))
+    manter = [l for l in linhas if int(l["episodio"]) <= ate_episodio]
+    if len(manter) == len(linhas):
+        return
+    caminho.rename(caminho.with_name(f"{caminho.stem}_antes_de_{carimbo}.csv"))
+    with caminho.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=COLUNAS, extrasaction="ignore", restval="")
+        w.writeheader()
+        w.writerows(manter)
+
+
+def preparar_pasta(args, saida: Path, carimbo: str):
+    """Decide entre treino novo, continuação ou recomeço. Devolve (agentes, episódio inicial, melhor)."""
+    tem_treino = saida.exists() and any(saida.iterdir())
+    if args.continuar and args.recomecar:
+        raise SystemExit("Use --continuar ou --recomecar, não os dois.")
+
+    if args.recomecar and tem_treino:
+        arquivo = saida.with_name(f"{saida.name}_antigo_{carimbo}")
+        saida.rename(arquivo)
+        print(f"Treino anterior guardado em {arquivo}")
+        tem_treino = False
+
+    if args.continuar:
+        nome = "checkpoint.npz" if args.continuar == "ultimo" else "checkpoint_melhor.npz"
+        caminho = saida / nome
+        if not caminho.exists():
+            raise SystemExit(f"Não achei {caminho}. Não há treino para continuar nessa pasta.")
+        agentes, info = carregar_checkpoint(caminho)
+        feitos = int(info["episodio"])
+        if feitos >= args.episodios:
+            raise SystemExit(
+                f"Esse checkpoint já tem {feitos} episódios. Para treinar mais, use --episodios maior, "
+                f"ex.: --episodios {feitos + 50} --continuar {args.continuar}"
+            )
+        for campo in ("duracao", "recompensa"):
+            if getattr(args, campo) != info[campo]:
+                print(f"Aviso: usando {campo}={info[campo]} do treino original (você passou {getattr(args, campo)}).")
+                setattr(args, campo, info[campo])
+        for csv_nome in ("treino.csv", "validacao.csv"):
+            cortar_csv(saida / csv_nome, feitos, carimbo)
+        ep = next(iter(agentes.values()))
+        print(f"Continuando do episódio {feitos} ({args.continuar}) | epsilon {ep.eps:.2f} | "
+              f"memória {ep.tamanho} transições por agente")
+        return agentes, feitos, float(info.get("melhor", float("inf")))
+
+    if tem_treino:
+        raise SystemExit(
+            f"A pasta {saida} já tem um treino. Escolha:\n"
+            f"  --continuar          segue do último episódio\n"
+            f"  --continuar melhor   segue do melhor episódio da validação\n"
+            f"  --recomecar          guarda esse treino com outro nome e começa do zero\n"
+            f"  --saida outra_pasta  treino novo em outra pasta"
+        )
+    saida.mkdir(parents=True, exist_ok=True)
+    return {}, 0, float("inf")
+
+
+def main() -> None:
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--episodios", type=int, default=100, help="total de episódios (contando os já feitos)")
+    p.add_argument("--continuar", nargs="?", const="ultimo", choices=["ultimo", "melhor"],
+                   help="continua um treino salvo (padrão: do último episódio)")
+    p.add_argument("--recomecar", action="store_true", help="guarda o treino existente e começa do zero")
+    p.add_argument("--duracao", type=int, default=4200, help="segundos simulados por episódio")
+    p.add_argument("--recompensa", choices=["fila", "espera"], default="fila")
+    p.add_argument("--avaliar-cada", type=int, default=5, help="avalia na validação a cada N episódios")
+    p.add_argument("--exploracao", type=float, default=0.5,
+                   help="fração do treino em que o epsilon cai de 1,0 até 0,05 (só vale em treino novo)")
+    p.add_argument("--lr", type=float, default=5e-4)
+    p.add_argument("--gamma", type=float, default=0.99)
+    p.add_argument("--semente", type=int, default=0)
+    p.add_argument("--saida", default=str(RESULTADOS / "idqn"))
+    p.add_argument("--manter-xml", action="store_true", help="guarda os XML do SUMO de cada episódio de treino")
+    args = p.parse_args()
+
+    manifesto = carregar_manifesto()
+    treino = rotas_do_conjunto(manifesto, "treino")
+    validacao = rotas_do_conjunto(manifesto, "validacao")[0]
+    saida = Path(args.saida)
+    carimbo = datetime.now().strftime("%Y%m%d_%H%M%S")
+    agentes, primeiro_ep, melhor = preparar_pasta(args, saida, carimbo)
+    eps_passos = int(args.exploracao * args.episodios * (args.duracao // DELTA))
+    estado = {"recompensa": 0.0, "perdas": []}
+
+    def politica(env, obs):
+        if not agentes:
+            for i, a in enumerate(env.agentes):
+                agentes[a] = AgenteDQN(
+                    env.dim_obs[a], env.n_acoes[a], semente=args.semente * 1000 + i,
+                    lr=args.lr, gamma=args.gamma, eps_passos=eps_passos,
+                )
+            print(f"Agentes: {len(agentes)} | fixos no programa original: {env.fixos or 'nenhum'}")
+        if not estado.get("conferido"):
+            for a in env.agentes:
+                ag = agentes.get(a)
+                if ag is None or ag.dim != env.dim_obs[a] or ag.n_acoes != env.n_acoes[a]:
+                    raise SystemExit(
+                        f"O checkpoint não bate com a rede atual no semáforo '{a}'. "
+                        "A rede ou o agrupamento de semáforos mudou: use --recomecar."
+                    )
+            estado["conferido"] = True
+        return {a: agentes[a].agir(obs[a]) for a in env.agentes}
+
+    def aprender(obs, acoes, recompensas, obs_seguinte):
+        for a, acao in acoes.items():
+            ag = agentes[a]
+            ag.guardar(obs[a], acao, recompensas[a], obs_seguinte[a])
+            perda = ag.treinar()
+            if perda is not None:
+                estado["perdas"].append(perda)
+            estado["recompensa"] += recompensas[a]
+
+    def gulosa(env, obs):
+        return {a: agentes[a].agir(obs[a], explorar=False) for a in env.agentes}
+
+    def info_checkpoint(ep_feitos):
+        return {"episodio": ep_feitos, "melhor": melhor, "duracao": args.duracao,
+                "recompensa": args.recompensa, "semente": args.semente}
+
+    inicio = time.time()
+    feitos_nesta_sessao = 0
+    try:
+        for ep in range(primeiro_ep, args.episodios):
+            cenario = treino[ep % len(treino)]
+            pasta_ep = saida / "episodios" / f"ep{ep + 1:03d}"
+            env = AmbienteGavea(REDE, cenario["rotas"], duracao=args.duracao, delta=DELTA,
+                                recompensa=args.recompensa, semente=ep, saida=pasta_ep)
+            estado["recompensa"], estado["perdas"] = 0.0, []
+            t0 = time.time()
+            resumo = rodar_episodio(env, politica, aprender)
+            segundos = time.time() - t0
+            if not args.manter_xml:
+                shutil.rmtree(pasta_ep, ignore_errors=True)
+
+            epsilon = next(iter(agentes.values())).eps
+            anexar_csv(saida / "treino.csv", {
+                "episodio": ep + 1, "cenario": cenario["nome"], "epsilon": epsilon,
+                "recompensa": estado["recompensa"],
+                "perda_media": float(np.mean(estado["perdas"])) if estado["perdas"] else float("nan"),
+                "segundos": segundos, **resumo,
+            })
+            print(
+                f"ep {ep + 1:3d}/{args.episodios} | {cenario['nome']} | eps {epsilon:.2f} | "
+                f"perdido {resumo.get('tempo_perdido_medio_s', float('nan')):6.1f} s | "
+                f"teleportes {resumo.get('teleportes', '?')} | {segundos:5.0f} s",
+                flush=True,
+            )
+
+            melhorou = False
+            if (ep + 1) % args.avaliar_cada == 0 or ep + 1 == args.episodios:
+                env_val = AmbienteGavea(REDE, validacao["rotas"], duracao=args.duracao, delta=DELTA,
+                                        recompensa=args.recompensa, semente=validacao["semente"],
+                                        saida=saida / "validacao" / f"ep{ep + 1:03d}")
+                r_val = rodar_episodio(env_val, gulosa)
+                anexar_csv(saida / "validacao.csv", {"episodio": ep + 1, "cenario": validacao["nome"], **r_val})
+                chave, valor = criterio(r_val)
+                melhorou = valor < melhor or not (saida / "melhor.npz").exists()
+                if melhorou:
+                    melhor = valor
+                print(f"   validação: {chave} = {valor:.1f}{'  <- melhor até agora' if melhorou else ''}",
+                      flush=True)
+
+            salvar_modelo(saida / "ultimo.npz", agentes, {"episodio": ep + 1})
+            salvar_checkpoint(saida / "checkpoint.npz", agentes, info_checkpoint(ep + 1))
+            if melhorou:
+                salvar_modelo(saida / "melhor.npz", agentes, {"episodio": ep + 1, "melhor": melhor})
+                shutil.copyfile(saida / "checkpoint.npz", saida / "checkpoint_melhor.npz")
+
+            feitos_nesta_sessao += 1
+            restante = (time.time() - inicio) / feitos_nesta_sessao * (args.episodios - ep - 1)
+            print(f"   faltam ~{restante / 60:.0f} min", flush=True)
+    except KeyboardInterrupt:
+        print(f"\nInterrompido. Para seguir de onde parou: "
+              f"python scripts/treinar_idqn.py --episodios {args.episodios} --continuar --saida {saida}")
+        return
+
+    print(f"\nFim. Melhor resultado na validação: {melhor:.1f}. Arquivos em {saida}")
+
+
+if __name__ == "__main__":
+    main()
