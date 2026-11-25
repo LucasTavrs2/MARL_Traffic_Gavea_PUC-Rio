@@ -14,17 +14,22 @@ MANIFESTO = DEMANDA / "manifesto.json"
 
 
 def preparar_sumo() -> Path:
-    """Define SUMO_HOME a partir do pacote eclipse-sumo, se ainda não estiver definido."""
-    home = os.environ.get("SUMO_HOME")
-    if not home:
-        try:
-            import sumo  # pacote eclipse-sumo
-        except ImportError as erro:
-            raise RuntimeError(
-                "SUMO não encontrado. Ative o .venv e rode: pip install -r requirements.txt"
-            ) from erro
+    """Usa o SUMO instalado no ambiente Python ativo (pacote eclipse-sumo).
+
+    Ele tem prioridade sobre a variável SUMO_HOME do sistema, que pode apontar para outra
+    instalação (por exemplo, um ambiente conda antigo com outra versão do SUMO).
+    """
+    try:
+        import sumo  # pacote eclipse-sumo
+
         home = str(sumo.SUMO_HOME)
         os.environ["SUMO_HOME"] = home
+    except ImportError:
+        home = os.environ.get("SUMO_HOME")
+        if not home:
+            raise RuntimeError(
+                "SUMO não encontrado. Ative o .venv e rode: pip install -r requirements.txt"
+            )
     ferramentas = Path(home) / "tools"
     if str(ferramentas) not in sys.path:
         sys.path.append(str(ferramentas))

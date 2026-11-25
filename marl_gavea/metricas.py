@@ -4,8 +4,18 @@ from __future__ import annotations
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-# vType criado pelo randomTrips --vehicle-class: o id é o nome da classe.
-TIPOS = {"passenger": "carros", "motorcycle": "motos", "bus": "onibus"}
+# O tipo sai do prefixo do id que o gerar_demanda.py dá a cada veículo (carro_12, moto_3, onibus_7);
+# se o id não tiver um desses prefixos, tenta pela classe do vType.
+PREFIXOS = {"carro_": "carros", "moto_": "motos", "onibus_": "onibus"}
+CLASSES = {"passenger": "carros", "motorcycle": "motos", "bus": "onibus"}
+TIPOS = {"carros": "carros", "motos": "motos", "onibus": "onibus"}
+
+
+def _tipo(id_veiculo: str, vtype: str) -> str:
+    for prefixo, nome in PREFIXOS.items():
+        if id_veiculo.startswith(prefixo):
+            return nome
+    return CLASSES.get(vtype, "outros")
 
 
 def _num(valor, padrao=0.0) -> float:
@@ -26,7 +36,7 @@ def ler_tripinfo(caminho: Path) -> dict:
         if el.tag == "tripinfo":
             viagens.append(
                 {
-                    "tipo": el.get("vType", ""),
+                    "tipo": _tipo(el.get("id", ""), el.get("vType", "")),
                     "chegada": _num(el.get("arrival"), -1.0),
                     "duracao": _num(el.get("duration")),
                     "perdido": _num(el.get("timeLoss")),

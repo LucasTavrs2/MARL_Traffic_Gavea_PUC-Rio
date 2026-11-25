@@ -7,17 +7,24 @@ Regras de segurança aplicadas a qualquer controlador (aleatório, max-pressure,
 
 Semáforos com uma única fase verde (por exemplo, travessias de pedestre no meio da quadra)
 não viram agentes: continuam rodando o programa original do SUMO em todos os métodos.
+
+Fila, densidade e pressão são medidas numa zona de cerca de 100 m antes (e depois) de cada
+semáforo, e não só na faixa que encosta nele, que muitas vezes tem poucos metros (veja zonas.py).
+
+Observação de cada agente: fase atual (one-hot), se já pode trocar, e, por faixa, densidade e fila
+na zona de entrada e densidade na zona de saída (para enxergar quando a via à frente está cheia).
 """
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
 
 from .comum import binario_sumo
 from .metricas import resumo_saida
+from .zonas import zonas_da_rede
 
 METROS_POR_VEICULO = 7.5
 
@@ -35,6 +42,11 @@ class Semaforo:
     fim_amarelo: float | None = None
     destino: int | None = None
     trocas: int = 0
+    zona_entrada: dict = field(default_factory=dict)  # faixa de entrada -> faixas da zona antes do semáforo
+    zona_saida: dict = field(default_factory=dict)  # faixa de saída -> faixas da zona depois do semáforo
+    cap_zona: dict = field(default_factory=dict)  # faixa de entrada -> veículos que cabem na zona
+    cap_saida: dict = field(default_factory=dict)  # faixa de saída -> veículos que cabem na zona
+    montante: list = field(default_factory=list)  # todas as faixas antes do semáforo, sem repetição
 
     @property
     def n_fases(self) -> int:
@@ -155,13 +167,18 @@ class AmbienteGavea:
         self.fixos = sorted(s.id for s in todos if s.n_fases < 2)
         self.agentes = sorted(self.semaforos)
         self.n_acoes = {a: self.semaforos[a].n_fases for a in self.agentes}
-        self.dim_obs = {a: self.semaforos[a].n_fases + 1 + 2 * len(self.semaforos[a].entradas) for a in self.agentes}
+        self.dim_obs = {
+            a: self.semaforos[a].n_fases + 1 + 2 * len(self.semaforos[a].entradas) + len(self.semaforos[a].saidas)
+            for a in self.agentes
+        }
+        self._montar_zonas()
 
         t = self.conn.simulation.getTime()
         for s in self.semaforos.values():
             s.fase, s.inicio_verde, s.fim_amarelo, s.destino, s.trocas = 0, t, None, None, 0
             if self.controlar:
                 self.conn.trafficlight.setRedYellowGreenState(s.id, s.fases[0])
+        self._ler_faixas()
         self._espera_anterior = {a: self._espera_total(a) for a in self.agentes}
         self._soma_fila = 0.0
         self._decisoes = 0
@@ -201,6 +218,7 @@ class AmbienteGavea:
             if t >= self.duracao:
                 break
 
+        self._ler_faixas()
         obs = {a: self._observar(a) for a in self.agentes}
         recompensas = {a: self._recompensa(a) for a in self.agentes}
         fila = sum(self._fila(a) for a in self.agentes)
@@ -221,25 +239,55 @@ class AmbienteGavea:
             s.fim_amarelo = t + self.amarelo
             s.destino = acao
 
+    # ------------------------------------------------------------------ zonas de detecção
+    def _montar_zonas(self) -> None:
+        zonas = zonas_da_rede(self.rede)
+        for s in self.semaforos.values():
+            s.zona_entrada = {f: zonas.montante(f) if zonas else [f] for f in s.entradas}
+            s.zona_saida = {f: zonas.jusante(f) if zonas else [f] for f in s.saidas}
+            s.cap_zona = {
+                f: max(s.capacidade[f], (zonas.tamanho(z) if zonas else 0.0) / METROS_POR_VEICULO)
+                for f, z in s.zona_entrada.items()
+            }
+            s.cap_saida = {
+                f: max(s.capacidade[f], (zonas.tamanho(z) if zonas else 0.0) / METROS_POR_VEICULO)
+                for f, z in s.zona_saida.items()
+            }
+            s.montante = sorted({f for z in s.zona_entrada.values() for f in z})
+        self._faixas = sorted(
+            {f for s in self.semaforos.values() for z in (*s.zona_entrada.values(), *s.zona_saida.values()) for f in z}
+        )
+
+    def _ler_faixas(self) -> None:
+        """Lê uma vez por decisão o estado de todas as faixas usadas por observação, recompensa e pressão."""
+        lane = self.conn.lane
+        self._veic = {f: lane.getLastStepVehicleNumber(f) for f in self._faixas}
+        self._parado = {f: lane.getLastStepHaltingNumber(f) for f in self._faixas}
+        self._espera = {f: lane.getWaitingTime(f) for f in self._faixas} if self.recompensa == "espera" else {}
+
+    @staticmethod
+    def _soma(tabela: dict, faixas) -> float:
+        return float(sum(tabela[f] for f in faixas))
+
     # ------------------------------------------------------------------ observação e recompensa
     def _observar(self, agente: str) -> np.ndarray:
         s = self.semaforos[agente]
-        lane = self.conn.lane
         t = self.conn.simulation.getTime()
         fase = np.zeros(s.n_fases, dtype=np.float32)
         fase[s.fase] = 1.0
         pode_trocar = [1.0 if t - s.inicio_verde >= self.verde_min else 0.0]
-        densidade = [min(1.0, lane.getLastStepVehicleNumber(f) / s.capacidade[f]) for f in s.entradas]
-        fila = [min(1.0, lane.getLastStepHaltingNumber(f) / s.capacidade[f]) for f in s.entradas]
-        return np.concatenate([fase, pode_trocar, densidade, fila]).astype(np.float32)
+        densidade = [min(1.0, self._soma(self._veic, s.zona_entrada[f]) / s.cap_zona[f]) for f in s.entradas]
+        fila = [min(1.0, self._soma(self._parado, s.zona_entrada[f]) / s.cap_zona[f]) for f in s.entradas]
+        return np.concatenate([fase, pode_trocar, densidade, fila, self._densidade_saida(s)]).astype(np.float32)
+
+    def _densidade_saida(self, s: Semaforo) -> list[float]:
+        return [min(1.0, self._soma(self._veic, s.zona_saida[f]) / s.cap_saida[f]) for f in s.saidas]
 
     def _fila(self, agente: str) -> float:
-        lane = self.conn.lane
-        return float(sum(lane.getLastStepHaltingNumber(f) for f in self.semaforos[agente].entradas))
+        return self._soma(self._parado, self.semaforos[agente].montante)
 
     def _espera_total(self, agente: str) -> float:
-        lane = self.conn.lane
-        return float(sum(lane.getWaitingTime(f) for f in self.semaforos[agente].entradas))
+        return self._soma(self._espera, self.semaforos[agente].montante) if self._espera else 0.0
 
     def _recompensa(self, agente: str) -> float:
         if self.recompensa == "fila":
@@ -251,17 +299,23 @@ class AmbienteGavea:
 
     # ------------------------------------------------------------------ usado pelo max-pressure
     def pressoes(self, agente: str) -> list[float]:
+        """Pressão de cada fase verde, normalizada pela capacidade (como no PressLight): soma, nos
+        movimentos que a fase libera, da ocupação da zona de entrada menos a da zona de saída.
+
+        Com contagens brutas, um trecho curto entre dois semáforos parece vazio mesmo lotado
+        (cabem 2 carros) e o controlador continua mandando carros para lá até travar o cruzamento.
+        Em ocupação, trecho lotado vale 1 e segura a fase que alimenta ele.
+        """
         s = self.semaforos[agente]
-        lane = self.conn.lane
-        n_entrada = {f: lane.getLastStepVehicleNumber(f) for f in s.entradas}
-        n_saida = {f: lane.getLastStepVehicleNumber(f) for f in s.saidas}
+        ocup_entrada = {f: min(1.0, self._soma(self._veic, s.zona_entrada[f]) / s.cap_zona[f]) for f in s.entradas}
+        ocup_saida = dict(zip(s.saidas, self._densidade_saida(s)))
         pressoes = []
         for estado in s.fases:
             p = 0.0
             for i, c in enumerate(estado):
                 if c in "Gg" and i < len(s.links) and s.links[i]:
                     entrada, saida = s.links[i]
-                    p += n_entrada[entrada] - n_saida[saida]
+                    p += ocup_entrada[entrada] - ocup_saida[saida]
             pressoes.append(p)
         return pressoes
 

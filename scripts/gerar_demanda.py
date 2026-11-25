@@ -5,8 +5,14 @@ Conjuntos:
 - validacao: usado durante o treino para guardar o melhor modelo;
 - teste: só para a comparação final, o agente nunca treina nele.
 
+Todos os volumes são multiplicados por --escala-global, calibrada com o diagnosticar.py para a
+rede escoar. Por padrão, origens e destinos favorecem as vias com mais faixas e mais rápidas.
+
 A proporção de veículos é provisória (cerca de 80% carros, 15% motos, 5% ônibus) até chegarem
 os dados de contagem.
+
+Uso:  python scripts/gerar_demanda.py
+      python scripts/gerar_demanda.py --escala-global 0.55
 """
 from __future__ import annotations
 
@@ -31,7 +37,7 @@ TIPOS = [
 ]
 
 
-def gerar_cenario(nome: str, semente: int, escala: float, duracao: int, sumo_home: Path) -> dict:
+def gerar_cenario(nome: str, semente: int, escala: float, duracao: int, sumo_home: Path, ponderar: bool) -> dict:
     pasta = DEMANDA / nome
     pasta.mkdir(parents=True, exist_ok=True)
     random_trips = sumo_home / "tools" / "randomTrips.py"
@@ -56,6 +62,10 @@ def gerar_cenario(nome: str, semente: int, escala: float, duracao: int, sumo_hom
             "--trip-attributes", 'departLane="best" departSpeed="max"',
             "--validate",
         ]
+        if ponderar:
+            # favorece origens e destinos em vias com mais faixas e mais rápidas (as avenidas),
+            # em vez de espalhar viagens igualmente por ruas residenciais
+            cmd += ["-L", "--speed-exponent", "2"]
         r = subprocess.run(cmd, env=ambiente, capture_output=True, text=True)
         if r.returncode != 0 and "edge-permission" in (r.stderr or ""):
             # versões antigas do randomTrips só conhecem o nome antigo da opção
@@ -76,22 +86,29 @@ def main() -> None:
     p.add_argument("--teste", type=int, default=5)
     p.add_argument("--duracao", type=int, default=3600, help="segundos com chegada de veículos")
     p.add_argument("--semente", type=int, default=0)
+    p.add_argument("--escala-global", type=float, default=1.0,
+                   help="multiplica o volume de todos os cenários; use o valor sugerido pelo diagnosticar.py")
+    p.add_argument("--sem-ponderar", action="store_true",
+                   help="sorteia origens e destinos sem favorecer as avenidas (comportamento antigo)")
     args = p.parse_args()
 
     if not REDE.exists():
         raise SystemExit(f"Rede não encontrada: {REDE}")
     sumo_home = preparar_sumo()
     rng = np.random.default_rng(args.semente)
-    manifesto = {"duracao_demanda": args.duracao, "treino": [], "validacao": [], "teste": []}
+    ponderar = not args.sem_ponderar
+    manifesto = {"duracao_demanda": args.duracao, "escala_global": args.escala_global,
+                 "ponderar_vias": ponderar, "treino": [], "validacao": [], "teste": []}
 
+    g = args.escala_global
     planos = (
-        [("treino", f"treino_s{i:03d}", i, float(rng.uniform(0.8, 1.2))) for i in range(1, args.treino + 1)]
-        + [("validacao", f"validacao_s{50 + i:03d}", 50 + i, 1.0) for i in range(1, args.validacao + 1)]
-        + [("teste", f"teste_s{100 + i:03d}", 100 + i, 1.0) for i in range(1, args.teste + 1)]
+        [("treino", f"treino_s{i:03d}", i, g * float(rng.uniform(0.8, 1.2))) for i in range(1, args.treino + 1)]
+        + [("validacao", f"validacao_s{50 + i:03d}", 50 + i, g) for i in range(1, args.validacao + 1)]
+        + [("teste", f"teste_s{100 + i:03d}", 100 + i, g) for i in range(1, args.teste + 1)]
     )
     for conjunto, nome, semente, escala in planos:
         print(f"Gerando {nome} (escala {escala:.2f})...", flush=True)
-        manifesto[conjunto].append(gerar_cenario(nome, semente, escala, args.duracao, sumo_home))
+        manifesto[conjunto].append(gerar_cenario(nome, semente, escala, args.duracao, sumo_home, ponderar))
 
     MANIFESTO.write_text(json.dumps(manifesto, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"\nPronto: {len(planos)} cenários em {DEMANDA}")

@@ -28,10 +28,19 @@ class Aleatorio:
 
 
 class MaxPressao:
-    """Max-pressure: abre a fase com maior diferença entre veículos nas faixas de entrada e de saída."""
+    """Max-pressure: abre a fase com maior diferença entre veículos antes e depois do semáforo.
+
+    Em empate com a fase atual, mantém a atual, para não gastar amarelo à toa.
+    """
 
     nome = "max_pressao"
     controla = True
 
     def __call__(self, env, obs):
-        return {a: int(np.argmax(env.pressoes(a))) for a in env.agentes}
+        acoes = {}
+        for a in env.agentes:
+            pressoes = env.pressoes(a)
+            melhor = int(np.argmax(pressoes))
+            atual = env.semaforos[a].fase
+            acoes[a] = atual if pressoes[atual] >= pressoes[melhor] else melhor
+        return acoes

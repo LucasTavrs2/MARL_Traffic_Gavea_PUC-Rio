@@ -58,20 +58,45 @@ Os scripts acham o SUMO sozinhos. Só precisa do `$env:SUMO_HOME` se for chamar 
 
 ## 4. Conferir o ambiente
 
+Se a rede mudou (atualização do `build.ps1` ou do `tls_grupos.nod.xml`), reconstrua antes, de qualquer pasta:
+
+```powershell
+.\maps\gavea_real\build.ps1
+```
+
+Ele deve terminar com "10 controladores de semáforo". Depois disso, a demanda tem de ser gerada de novo (passo 5).
+
+
 ```powershell
 python scripts/checar_ambiente.py
 ```
 
 Mostra a tabela de semáforos, quantas fases verdes cada um tem e quais viram agentes. Semáforos com uma fase verde só, como travessias no meio da quadra, ficam no programa original em todos os métodos, para a comparação ser justa.
 
-## 5. Gerar a demanda
+## 5. Gerar a demanda e calibrar o volume
 
 ```powershell
 python scripts/gerar_demanda.py
+python scripts/diagnosticar.py
+```
+
+O `gerar_demanda.py` cria 16 cenários em `demanda\`: 10 de treino (volume sorteado entre 80% e 120%), 1 de validação e 5 de teste. As origens e destinos favorecem as vias com mais faixas e mais rápidas (as avenidas), em vez de espalhar viagens igualmente pelas ruas residenciais (`--sem-ponderar` volta ao sorteio uniforme).
+
+O volume sintético ainda não vem de contagem real, então ele precisa ser calibrado para a rede escoar. O `diagnosticar.py` roda o atuado com 30% a 100% do volume, mostra onde os veículos ficam presos e termina com uma linha assim:
+
+```
+Regenere a demanda com:  python scripts/gerar_demanda.py --escala-global 0.55
+```
+
+Rode essa linha e confirme que o volume novo escoa, incluindo os 120% que aparecem no treino:
+
+```powershell
+python scripts/gerar_demanda.py --escala-global 0.55
+python scripts/diagnosticar.py --escalas 0.8 1.0 1.2
 python scripts/checar_ambiente.py
 ```
 
-Cria 16 cenários em `demanda\`: 10 de treino (volume sorteado entre 80% e 120%), 1 de validação e 5 de teste. A segunda checagem roda 2 minutos já com carros.
+Com 100% a meta é pelo menos 95% das viagens concluídas e quase nenhum teleporte. Com 120% pode haver alguma fila e poucos teleportes; se passar de algumas dezenas, use uma escala global um pouco menor.
 
 Para ver um cenário no sumo-gui:
 
@@ -86,6 +111,18 @@ python scripts/avaliar.py
 ```
 
 Roda atuado, aleatório e max-pressure nos 5 cenários de teste (15 simulações) e imprime o resumo. Os arquivos vão para `resultados\avaliacao\<data_hora>\`.
+
+## 6.1 Como ler o diagnóstico
+
+Teleporte é o SUMO removendo um veículo parado há 300 s. Se até o atuado tiver dezenas ou centenas por cenário, a rede está travando e o treino não vale a pena ainda. O diagnóstico lista os pontos onde os veículos ficam presos, com nome da rua e coordenadas (cole no Google Maps). A tabela completa fica em `resultados\diagnostico\<data_hora>\teleportes.csv`.
+
+- **Trava já com 30% do volume:** defeito na rede (trechos curtos demais, faixa sem conexão). Corrige-se no `build.ps1` ou no netedit.
+- **Só trava com o volume cheio:** a demanda sintética está pesada demais para a rede; a escala global resolve.
+- **Motivo `wrong lane`:** o veículo não consegue chegar à faixa de que precisa, quase sempre por defeito na rede.
+- **Motivo `yield`:** quem vem da rua lateral não acha brecha para entrar na avenida.
+- **Motivo `jam`:** fila parada, normalmente por causa de um bloqueio mais à frente.
+
+Se mudar a rede (`build.ps1` ou netedit), gere a demanda de novo: as rotas antigas usam trechos que podem ter mudado.
 
 ## 7. Treino de teste
 
@@ -188,7 +225,10 @@ No `git status`, confira que não aparecem `.venv`, `demanda` nem `resultados`.
 | Intervalo entre decisões | 5 s |
 | Amarelo | 3 s |
 | Verde mínimo e máximo | 10 s e 90 s |
-| Recompensa | Fila nas faixas de entrada (`--recompensa espera` usa o tempo de espera) |
+| Zona de detecção | Até 100 m antes de cada semáforo (parando no semáforo anterior) e até o próximo semáforo depois dele; o OSM corta as vias em trechos de poucos metros, então olhar só a faixa que encosta no semáforo esconderia a fila |
+| Observação | Fase atual, se já pode trocar, densidade e fila na zona de cada faixa de entrada, densidade na zona de cada faixa de saída |
+| Max-pressure | Pressão normalizada pela capacidade (ocupação da entrada menos ocupação da saída), mantém a fase atual em empate |
+| Recompensa | Veículos parados na zona antes do semáforo (`--recompensa espera` usa o tempo de espera) |
 | Episódio | 4.200 s: 3.600 s de chegadas mais 600 s para esvaziar |
 | Mistura de veículos | Cerca de 80% carros, 15% motos e 5% ônibus (provisória) |
 | IDQN | Double DQN por semáforo, rede 64×64, replay de 50 mil, epsilon de 1,0 a 0,05 na primeira metade do treino |

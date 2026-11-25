@@ -38,8 +38,8 @@ class TestAmbiente(unittest.TestCase):
         self.assertEqual(env.agentes, ["cruz"])
         self.assertEqual(env.fixos, ["fixo"])
         self.assertEqual(env.n_acoes["cruz"], 2)
-        self.assertEqual(env.dim_obs["cruz"], 2 + 1 + 2 * 2)
-        self.assertEqual(obs["cruz"].shape, (7,))
+        self.assertEqual(env.dim_obs["cruz"], 2 + 1 + 2 * 2 + 2)  # fases, pode trocar, entradas x2, saídas
+        self.assertEqual(obs["cruz"].shape, (9,))
 
     def test_respeita_verde_minimo_e_amarelo(self):
         env, sims = criar_env(delta=5, amarelo=3, verde_min=10)
@@ -74,9 +74,19 @@ class TestAmbiente(unittest.TestCase):
         env.reset()
         sim = sims[-1]
         sim.n["norte_in"], sim.n["leste_in"] = 1, 8
+        env._ler_faixas()  # o ambiente lê as faixas uma vez por decisão
         self.assertEqual(MaxPressao()(env, None), {"cruz": 1})
         sim.n["norte_in"], sim.n["leste_in"] = 9, 2
+        env._ler_faixas()
         self.assertEqual(MaxPressao()(env, None), {"cruz": 0})
+
+    def test_max_pressao_mantem_fase_no_empate(self):
+        env, sims = criar_env()
+        env.reset()
+        env.semaforos["cruz"].fase = 1
+        sims[-1].n["norte_in"], sims[-1].n["leste_in"] = 4, 4
+        env._ler_faixas()
+        self.assertEqual(MaxPressao()(env, None), {"cruz": 1})
 
     def test_episodio_termina_na_duracao(self):
         env, sims = criar_env(duracao=100)
@@ -196,8 +206,8 @@ class TestMetricas(unittest.TestCase):
         trip = """<tripinfos>
   <tripinfo id="carro_0" depart="1.00" departDelay="0.50" arrival="101.00" duration="100.00"
             waitingTime="20.00" timeLoss="40.00" vType="passenger"/>
-  <tripinfo id="bus_0" depart="5.00" departDelay="1.50" arrival="-1.00" duration="-1.00"
-            waitingTime="60.00" timeLoss="80.00" vType="bus"/>
+  <tripinfo id="onibus_0" depart="5.00" departDelay="1.50" arrival="-1.00" duration="-1.00"
+            waitingTime="60.00" timeLoss="80.00" vType="DEFAULT_VEHTYPE"/>
 </tripinfos>"""
         stats = """<statistics>
   <vehicles loaded="3" inserted="2" running="1" waiting="1"/>
