@@ -213,6 +213,7 @@ class TestMetricas(unittest.TestCase):
         stats = """<statistics>
   <vehicles loaded="3" inserted="2" running="1" waiting="1"/>
   <teleports total="4" jam="4" yield="0" wrongLane="0"/>
+  <vehicleTripStatistics count="2" timeLoss="60.00" departDelay="1.00" departDelayWaiting="30.00"/>
 </statistics>"""
         with tempfile.TemporaryDirectory() as d:
             (Path(d) / "tripinfo.xml").write_text(trip, encoding="utf-8")
@@ -225,6 +226,26 @@ class TestMetricas(unittest.TestCase):
         self.assertAlmostEqual(r["tempo_perdido_onibus_s"], 80.0)
         self.assertEqual(r["nao_inseridos"], 1)
         self.assertEqual(r["teleportes"], 4)
+        # (40 + 0,5) + (80 + 1,5) dos inseridos, mais 30 s do que não entrou, dividido pelos 3 gerados
+        self.assertAlmostEqual(r["atraso_total_medio_s"], 152.0 / 3)
+        self.assertFalse(any(k.startswith("_") for k in r))
+
+    def test_atraso_total_sem_espera_dos_nao_inseridos(self):
+        trip = """<tripinfos>
+  <tripinfo id="carro_0" depart="1.00" departDelay="10.00" arrival="101.00" duration="100.00"
+            waitingTime="20.00" timeLoss="40.00" vType="passenger"/>
+</tripinfos>"""
+        for extra, esperado in (("", 50.0 / 2), ('<vehicleTripStatistics departDelayWaiting="-1.00"/>', 50.0 / 2)):
+            stats = f"""<statistics><vehicles loaded="2" inserted="1"/>{extra}</statistics>"""
+            with tempfile.TemporaryDirectory() as d:
+                (Path(d) / "tripinfo.xml").write_text(trip, encoding="utf-8")
+                (Path(d) / "estatisticas.xml").write_text(stats, encoding="utf-8")
+                r = resumo_saida(Path(d))
+            self.assertAlmostEqual(r["atraso_total_medio_s"], esperado)
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "tripinfo.xml").write_text(trip, encoding="utf-8")
+            r = resumo_saida(Path(d))
+        self.assertAlmostEqual(r["atraso_total_medio_s"], 50.0)
 
 
 if __name__ == "__main__":

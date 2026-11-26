@@ -41,13 +41,15 @@ COLUNAS = [
     "veiculos", "concluidos", "nao_inseridos", "teleportes", "fila_media_veic", "trocas_de_fase",
     "trocas_forcadas", "trocas_por_espera",
     "tempo_perdido_carros_s", "tempo_perdido_motos_s", "tempo_perdido_onibus_s",
+    "atraso_insercao_medio_s", "atraso_total_medio_s",
 ]
 DELTA = 5
 
 
 def criterio(resumo: dict) -> tuple[str, float]:
-    """Métrica usada para escolher o melhor modelo: tempo perdido médio; se faltar, fila média."""
-    for chave in ("tempo_perdido_medio_s", "fila_media_veic"):
+    """Métrica usada para escolher o melhor modelo: atraso total médio (tempo perdido + espera para
+    entrar na rede); se faltar, tempo perdido médio; se faltar, fila média."""
+    for chave in ("atraso_total_medio_s", "tempo_perdido_medio_s", "fila_media_veic"):
         valor = resumo.get(chave)
         if isinstance(valor, (int, float)) and math.isfinite(valor):
             return chave, float(valor)

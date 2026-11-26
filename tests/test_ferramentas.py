@@ -378,3 +378,18 @@ class TestEstabilidade(unittest.TestCase):
         de_novo = AgenteDQN.de_checkpoint(arrays, "x_", meta)
         self.assertEqual(de_novo.limites_q, (-20.0, 0.0))
         self.assertEqual((de_novo.gamma, de_novo.lr, de_novo.alvo_cada), (0.95, 1e-4, 1000))
+
+
+import avaliar  # noqa: E402
+import treinar_idqn  # noqa: E402
+
+
+class TestCriterios(unittest.TestCase):
+    def test_validacao_usa_atraso_total(self):
+        r = {"atraso_total_medio_s": 80.0, "tempo_perdido_medio_s": 60.0, "fila_media_veic": 5.0}
+        self.assertEqual(treinar_idqn.criterio(r), ("atraso_total_medio_s", 80.0))
+        self.assertEqual(treinar_idqn.criterio({"tempo_perdido_medio_s": 60.0}), ("tempo_perdido_medio_s", 60.0))
+
+    def test_variacao_sem_referencia_nao_quebra(self):
+        self.assertAlmostEqual(avaliar.variacao_pct(90.0, 100.0), -10.0)
+        self.assertTrue(np.isnan(avaliar.variacao_pct(90.0, float("nan"))))

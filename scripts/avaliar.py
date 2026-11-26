@@ -30,6 +30,7 @@ from marl_gavea.comum import REDE, RESULTADOS, carregar_manifesto, espelhar_said
 from marl_gavea.controladores import Aleatorio, Atuado, MaxPressao  # noqa: E402
 
 METRICAS = [
+    ("atraso_total_medio_s", "atraso total (s)"),
     ("tempo_perdido_medio_s", "perdido (s)"),
     ("espera_media_s", "espera (s)"),
     ("tempo_viagem_medio_s", "viagem (s)"),
@@ -37,6 +38,14 @@ METRICAS = [
     ("teleportes", "teleportes"),
     ("tempo_perdido_onibus_s", "perdido ônibus (s)"),
 ]
+# Comparação em atraso total contra estes métodos, quando estão na mesma rodada.
+REFERENCIAS = ("atuado", "max_pressao")
+
+
+def variacao_pct(valor: float, ref: float) -> float:
+    if not ref or math.isnan(ref) or math.isnan(valor):
+        return float("nan")
+    return 100.0 * (valor - ref) / ref
 
 
 def criar_politica(nome: str, modelo: str | None):
@@ -104,25 +113,27 @@ def main() -> None:
         w.writeheader()
         w.writerows(linhas)
 
+    refs = [m for m in REFERENCIAS if m in args.metodos]
     with (pasta / "resumo.csv").open("w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(["escala", "metodo"] + [f"{m}_{s}" for m, _ in METRICAS for s in ("media", "desvio")]
-                   + ["perdido_vs_atuado_pct"])
+                   + [f"atraso_total_vs_{r}_pct" for r in refs])
         for escala in args.escalas:
             resumo_metodos = {}
             for metodo in args.metodos:
                 do_metodo = [l for l in linhas if l["metodo"] == metodo and l["escala"] == escala]
                 resumo_metodos[metodo] = {m: media_desvio([l.get(m) for l in do_metodo]) for m, _ in METRICAS}
-            ref = resumo_metodos.get("atuado", {}).get("tempo_perdido_medio_s", (float("nan"),))[0]
             volume = f", volume {escala * 100:.0f}%" if escala != 1.0 or len(args.escalas) > 1 else ""
             print(f"\nResumo no conjunto '{args.conjunto}' ({len(cenarios)} cenário(s){volume}), média ± desvio:")
-            print(f"{'método':12s}" + "".join(f"{rotulo:>22s}" for _, rotulo in METRICAS) + f"{'perdido vs atuado':>20s}")
+            print(f"{'método':12s}" + "".join(f"{rotulo:>22s}" for _, rotulo in METRICAS)
+                  + "".join(f"{'vs ' + r:>16s}" for r in refs))
             for metodo, r in resumo_metodos.items():
-                perdido = r["tempo_perdido_medio_s"][0]
-                variacao = 100.0 * (perdido - ref) / ref if ref and not math.isnan(ref) else float("nan")
+                atraso = r["atraso_total_medio_s"][0]
+                variacoes = [variacao_pct(atraso, resumo_metodos[ref]["atraso_total_medio_s"][0]) for ref in refs]
                 print(f"{metodo:12s}" + "".join(f"{r[m][0]:>14.1f} ± {r[m][1]:<5.1f}" for m, _ in METRICAS)
-                      + f"{variacao:>+19.1f}%")
-                w.writerow([escala, metodo] + [round(x, 3) for m, _ in METRICAS for x in r[m]] + [round(variacao, 2)])
+                      + "".join(f"{v:>+15.1f}%" for v in variacoes))
+                w.writerow([escala, metodo] + [round(x, 3) for m, _ in METRICAS for x in r[m]]
+                           + [round(v, 2) for v in variacoes])
     print(f"\nArquivos em {pasta} (o que apareceu aqui está em saida.txt)")
 
 

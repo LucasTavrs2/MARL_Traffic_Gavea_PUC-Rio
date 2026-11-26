@@ -149,7 +149,7 @@ O `Ctrl+C` interrompe com segurança: perde só o episódio em andamento. Ficam 
 | --- | --- |
 | `treino.csv` | Uma linha por episódio de treino |
 | `validacao.csv` | Política sem exploração no cenário de validação, com 100% e 150% do volume, a cada 5 episódios |
-| `melhor.npz` | Redes do episódio com menor tempo perdido médio na validação (média dos dois volumes; para o `avaliar.py`) |
+| `melhor.npz` | Redes do episódio com menor atraso total médio na validação (média dos dois volumes; para o `avaliar.py`) |
 | `ultimo.npz` | Redes do último episódio completo (para o `avaliar.py`) |
 | `checkpoint.npz` | Tudo para continuar: redes, otimizador, memória de replay, epsilon e sorteador |
 | `checkpoint_melhor.npz` | O mesmo, no episódio do melhor resultado na validação |
@@ -248,11 +248,13 @@ No `git status`, confira que não aparecem `.venv`, `demanda` nem `resultados`.
 
 ## Como ler os resultados
 
-- **Tempo perdido médio** é a métrica principal: segundos que cada veículo perdeu em relação a andar livre.
+- **Atraso total médio** é a métrica principal: o tempo perdido na rede mais a espera para entrar nela, dividido por todos os veículos gerados, inclusive os que não chegaram a entrar.
+- **Tempo perdido médio**: segundos que cada veículo perdeu em relação a andar livre, contando só quem entrou na rede. Sozinho, engana: um controle que deixa a fila chegar à borda da rede segura carros do lado de fora, e essa espera não entra no tempo perdido.
+- **vs atuado / vs max_pressao**: variação do atraso total em relação a esses métodos, quando eles estão na mesma rodada do `avaliar.py`.
 - **Teleportes** acima de zero indicam travamento: o SUMO remove um veículo parado há 300 s. Se até o atuado tiver muitos, a demanda está pesada demais para a rede.
 - **Concluídos %** é a fração de veículos que chegou ao destino dentro do episódio.
-- **Sucesso**: o IDQN abaixo do atuado e do max-pressure no tempo perdido, sem mais teleportes. Bater o aleatório não basta.
-- **Curva de aprendizado**: abra `treino.csv` no Excel e veja o `tempo_perdido_medio_s` cair conforme o `epsilon` desce.
+- **Sucesso**: o IDQN abaixo do atuado e do max-pressure no atraso total, sem mais teleportes. Bater o aleatório não basta.
+- **Curva de aprendizado**: abra `treino.csv` no Excel e veja o `atraso_total_medio_s` cair conforme o `epsilon` desce.
 
 ## Parâmetros usados
 
