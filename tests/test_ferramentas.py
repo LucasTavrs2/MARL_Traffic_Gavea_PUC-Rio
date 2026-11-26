@@ -393,3 +393,27 @@ class TestCriterios(unittest.TestCase):
     def test_variacao_sem_referencia_nao_quebra(self):
         self.assertAlmostEqual(avaliar.variacao_pct(90.0, 100.0), -10.0)
         self.assertTrue(np.isnan(avaliar.variacao_pct(90.0, float("nan"))))
+
+
+from marl_gavea import comum  # noqa: E402
+
+
+class TestTempoESuspensao(unittest.TestCase):
+    def test_estimativa_ignora_suspensao(self):
+        normal = [16.0] * 19
+        self.assertAlmostEqual(treinar_idqn.estimar_restante(normal + [16.0], 100), 1600.0)
+        # uma rodada de 5,5 h (PC suspenso) conta como 5x a mediana, não como 5,5 h
+        com_pausa = treinar_idqn.estimar_restante(normal + [19965.0], 100)
+        self.assertLess(com_pausa, 2000.0)
+
+    def test_impedir_suspensao_fora_do_windows_nao_faz_nada(self):
+        with mock.patch.object(comum.sys, "platform", "linux"):
+            self.assertFalse(comum.impedir_suspensao())
+
+    def test_impedir_suspensao_no_windows_chama_a_api(self):
+        chamada = mock.Mock(return_value=1)
+        falso = mock.Mock()
+        falso.windll.kernel32.SetThreadExecutionState = chamada
+        with mock.patch.object(comum.sys, "platform", "win32"), mock.patch.dict(sys.modules, {"ctypes": falso}):
+            self.assertTrue(comum.impedir_suspensao())
+        chamada.assert_called_once_with(0x80000001)

@@ -24,7 +24,9 @@ import math
 import shutil
 import sys
 import time
+from collections import deque
 from datetime import datetime
+from statistics import median
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -32,7 +34,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import numpy as np  # noqa: E402
 
 from marl_gavea.ambiente import AmbienteGavea, rodar_episodio  # noqa: E402
-from marl_gavea.comum import REDE, RESULTADOS, carregar_manifesto, rotas_do_conjunto  # noqa: E402
+from marl_gavea.comum import (  # noqa: E402
+    REDE, RESULTADOS, carregar_manifesto, impedir_suspensao, rotas_do_conjunto,
+)
 from marl_gavea.idqn import AgenteDQN, carregar_checkpoint, salvar_checkpoint, salvar_modelo  # noqa: E402
 
 COLUNAS = [
@@ -54,6 +58,18 @@ def criterio(resumo: dict) -> tuple[str, float]:
         if isinstance(valor, (int, float)) and math.isfinite(valor):
             return chave, float(valor)
     return "nenhuma", float("inf")
+
+
+def estimar_restante(duracoes, faltam: int) -> float:
+    """Segundos até o fim, pela média das últimas rodadas (episódio + validação, quando houve).
+
+    Rodadas muito acima do normal (o computador suspendeu, por exemplo) contam como 5x a mediana,
+    para não inflar a estimativa pelo resto do treino."""
+    if not duracoes:
+        return float("nan")
+    tipico = median(duracoes)
+    limpas = [min(d, 5 * tipico) for d in duracoes]
+    return sum(limpas) / len(limpas) * faltam
 
 
 def anexar_csv(caminho: Path, linha: dict) -> None:
@@ -198,10 +214,12 @@ def main() -> None:
         return {"episodio": ep_feitos, "melhor": melhor, "duracao": args.duracao,
                 "recompensa": args.recompensa, "semente": args.semente}
 
-    inicio = time.time()
-    feitos_nesta_sessao = 0
+    if impedir_suspensao():
+        print("Suspensão automática do Windows bloqueada enquanto o treino roda (a tela ainda pode apagar).")
+    duracoes = deque(maxlen=20)
     try:
         for ep in range(primeiro_ep, args.episodios):
+            t_rodada = time.time()
             cenario = treino[ep % len(treino)]
             pasta_ep = saida / "episodios" / f"ep{ep + 1:03d}"
             env = AmbienteGavea(REDE, cenario["rotas"], duracao=args.duracao, delta=DELTA,
@@ -270,9 +288,12 @@ def main() -> None:
                 salvar_modelo(saida / "melhor.npz", agentes, {"episodio": ep + 1, "melhor": melhor})
                 shutil.copyfile(saida / "checkpoint.npz", saida / "checkpoint_melhor.npz")
 
-            feitos_nesta_sessao += 1
-            restante = (time.time() - inicio) / feitos_nesta_sessao * (args.episodios - ep - 1)
-            print(f"   faltam ~{restante / 60:.0f} min", flush=True)
+            duracao_rodada = time.time() - t_rodada
+            if len(duracoes) >= 5 and duracao_rodada > 10 * median(duracoes):
+                print(f"   essa rodada levou {duracao_rodada / 60:.0f} min: o computador provavelmente suspendeu",
+                      flush=True)
+            duracoes.append(duracao_rodada)
+            print(f"   faltam ~{estimar_restante(duracoes, args.episodios - ep - 1) / 60:.0f} min", flush=True)
     except KeyboardInterrupt:
         print(f"\nInterrompido. Para seguir de onde parou: "
               f"python scripts/treinar_idqn.py --episodios {args.episodios} --continuar --saida {saida}")

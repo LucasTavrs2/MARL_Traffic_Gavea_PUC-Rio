@@ -86,3 +86,17 @@ def espelhar_saida(caminho: Path) -> Path:
     caminho.parent.mkdir(parents=True, exist_ok=True)
     sys.stdout = _Espelho(sys.stdout, caminho.open("a", encoding="utf-8"))
     return caminho
+
+
+def impedir_suspensao() -> bool:
+    """No Windows, pede ao sistema para não suspender por inatividade enquanto este processo roda.
+
+    A tela ainda pode apagar. Vale até o processo terminar. Não impede a suspensão ao fechar a tampa
+    do notebook nem a pedida pelo menu Iniciar. Em outros sistemas não faz nada. Devolve True se
+    o pedido foi aceito (confira com `powercfg /requests`: o python aparece em SYSTEM)."""
+    if sys.platform != "win32":
+        return False
+    import ctypes
+
+    ES_CONTINUOUS, ES_SYSTEM_REQUIRED = 0x80000000, 0x00000001
+    return bool(ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED))

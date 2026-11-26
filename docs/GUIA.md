@@ -134,14 +134,14 @@ Anote os segundos por episódio que aparecem na tela. Eles dão a estimativa do 
 
 ## 8. Treino longo
 
-Antes, deixe o PC sem suspender:
+O `treinar_idqn.py` e o `avaliar.py` pedem ao Windows para não suspender por inatividade enquanto rodam; a tela ainda pode apagar. Para conferir, num outro terminal, `powercfg /requests` tem de mostrar o `python.exe` em `SYSTEM`. Isso não segura a suspensão ao fechar a tampa do notebook. Num notebook, deixe na tomada e com a tampa aberta, ou configure a tampa para não fazer nada na tomada:
 
 ```powershell
-powercfg /change standby-timeout-ac 0
-python scripts/treinar_idqn.py --episodios 100
+powercfg /setacvalueindex SCHEME_CURRENT SUB_BUTTONS LIDACTION 0
+powercfg /setactive SCHEME_CURRENT
 ```
 
-Depois do treino, volte a suspensão para o valor que usava (por exemplo, `powercfg /change standby-timeout-ac 30`).
+Se uma rodada passar de 10 vezes o tempo normal, o treino avisa que o computador provavelmente suspendeu. A suspensão não estraga o treino: ele continua de onde parou quando o PC acorda.
 
 O `Ctrl+C` interrompe com segurança: perde só o episódio em andamento. Ficam salvos em `resultados\idqn\`:
 

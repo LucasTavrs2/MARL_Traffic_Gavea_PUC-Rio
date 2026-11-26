@@ -26,7 +26,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import numpy as np  # noqa: E402
 
 from marl_gavea.ambiente import AmbienteGavea, rodar_episodio  # noqa: E402
-from marl_gavea.comum import REDE, RESULTADOS, carregar_manifesto, espelhar_saida, rotas_do_conjunto  # noqa: E402
+from marl_gavea.comum import (  # noqa: E402
+    REDE, RESULTADOS, carregar_manifesto, espelhar_saida, impedir_suspensao, rotas_do_conjunto,
+)
 from marl_gavea.controladores import Aleatorio, Atuado, MaxPressao  # noqa: E402
 
 METRICAS = [
@@ -91,6 +93,7 @@ def main() -> None:
     pasta = Path(args.saida) / carimbo
     linhas = []
     politicas = {m: criar_politica(m, args.modelo) for m in args.metodos}  # falha logo se faltar o modelo
+    impedir_suspensao()
     espelhar_saida(pasta / "saida.txt")
 
     for escala in args.escalas:
