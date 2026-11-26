@@ -57,6 +57,7 @@ class Semaforo:
     cap_zona: dict = field(default_factory=dict)  # faixa de entrada -> veículos que cabem na zona
     cap_saida: dict = field(default_factory=dict)  # faixa de saída -> veículos que cabem na zona
     montante: list = field(default_factory=list)  # todas as faixas antes do semáforo, sem repetição
+    cap_montante: float = 1.0  # veículos que cabem em todas as zonas antes do semáforo
 
     @property
     def n_fases(self) -> int:
@@ -342,6 +343,10 @@ class AmbienteGavea:
                 for f, z in s.zona_saida.items()
             }
             s.montante = sorted({f for z in s.zona_entrada.values() for f in z})
+            if zonas:
+                s.cap_montante = max(1.0, zonas.tamanho(s.montante) / METROS_POR_VEICULO)
+            else:
+                s.cap_montante = max(1.0, float(sum(s.capacidade[f] for f in s.entradas)))
         self._faixas = sorted(
             {f for s in self.semaforos.values() for z in (*s.zona_entrada.values(), *s.zona_saida.values()) for f in z}
         )
@@ -382,7 +387,9 @@ class AmbienteGavea:
 
     def _recompensa(self, agente: str) -> float:
         if self.recompensa == "fila":
-            return -self._fila(agente) / 10.0
+            # fração das zonas antes do semáforo ocupada por veículos parados: fica entre -1 e 0
+            # qualquer que seja o tamanho do cruzamento ou o volume do cenário
+            return -min(1.0, self._fila(agente) / self.semaforos[agente].cap_montante)
         atual = self._espera_total(agente)
         r = (self._espera_anterior[agente] - atual) / 100.0
         self._espera_anterior[agente] = atual

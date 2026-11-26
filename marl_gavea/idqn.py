@@ -72,17 +72,23 @@ class AgenteDQN:
         *,
         semente: int = 0,
         oculto=(64, 64),
-        lr: float = 5e-4,
-        gamma: float = 0.99,
+        lr: float = 1e-4,
+        gamma: float = 0.95,
         memoria: int = 50_000,
         lote: int = 64,
         aquecimento: int = 1_000,
-        alvo_cada: int = 500,
+        alvo_cada: int = 1_000,
         eps_inicial: float = 1.0,
         eps_final: float = 0.05,
         eps_passos: int = 50_000,
         clip_grad: float = 10.0,
+        limites_q=None,
     ):
+        """limites_q: faixa em que o valor Q verdadeiro tem de estar (com recompensa entre -1 e 0 e
+        desconto gamma, Q fica entre -1/(1-gamma) e 0). Os alvos do aprendizado são cortados nessa
+        faixa, o que impede a rede de divergir para valores absurdos."""
+        self.limites_q = tuple(limites_q) if limites_q is not None else None
+        self.q_medio = float("nan")
         self.dim, self.n_acoes, self.oculto = dim, n_acoes, tuple(oculto)
         self.lr = lr
         self.gamma, self.lote, self.aquecimento, self.alvo_cada = gamma, lote, aquecimento, alvo_cada
@@ -131,9 +137,12 @@ class AgenteDQN:
         melhor = np.argmax(q_s2, axis=1)  # Double DQN: a rede online escolhe, a alvo avalia
         q_alvo, _ = self.alvo.forward(s2)
         y = r + self.gamma * q_alvo[linhas, melhor]
+        if self.limites_q is not None:
+            y = np.clip(y, *self.limites_q)
 
         q, cache = self.q.forward(s)
         erro = q[linhas, a] - y
+        self.q_medio = float(np.mean(q[linhas, a]))
         d_q = np.zeros_like(q)
         d_q[linhas, a] = np.clip(erro, -1.0, 1.0) / self.lote  # derivada da perda de Huber
         grads = self.q.backward(d_q, cache)
@@ -167,6 +176,7 @@ class AgenteDQN:
             "gamma": self.gamma, "memoria": len(self.A), "lote": self.lote, "aquecimento": self.aquecimento,
             "alvo_cada": self.alvo_cada, "eps_inicial": self.eps_inicial, "eps_final": self.eps_final,
             "eps_passos": self.eps_passos, "clip_grad": self.clip_grad,
+            "limites_q": list(self.limites_q) if self.limites_q is not None else None,
             "ponteiro": self.ponteiro, "tamanho": self.tamanho, "passos": self.passos,
             "atualizacoes": self.atualizacoes, "adam_t": self.otimizador.t,
             "rng": self.rng.bit_generator.state,
@@ -179,7 +189,7 @@ class AgenteDQN:
             meta["dim"], meta["n_acoes"], oculto=meta["oculto"], lr=meta["lr"], gamma=meta["gamma"],
             memoria=meta["memoria"], lote=meta["lote"], aquecimento=meta["aquecimento"],
             alvo_cada=meta["alvo_cada"], eps_inicial=meta["eps_inicial"], eps_final=meta["eps_final"],
-            eps_passos=meta["eps_passos"], clip_grad=meta["clip_grad"],
+            eps_passos=meta["eps_passos"], clip_grad=meta["clip_grad"], limites_q=meta.get("limites_q"),
         )
         ag.q.params = [dados[f"{prefixo}q{j}"].copy() for j in range(len(ag.q.params))]
         ag.alvo.params = [dados[f"{prefixo}alvo{j}"].copy() for j in range(len(ag.alvo.params))]

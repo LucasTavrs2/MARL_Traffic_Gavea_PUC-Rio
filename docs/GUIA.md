@@ -157,6 +157,8 @@ O `Ctrl+C` interrompe com segurança: perde só o episódio em andamento. Ficam 
 
 Os dois checkpoints crescem até a memória de replay encher (50 mil transições por semáforo) e podem somar algumas centenas de MB. Eles ficam fora do Git.
 
+A cada episódio o terminal mostra a **perda** (o erro médio da rede). Com a recompensa entre -1 e 0 ela deve ficar abaixo de 1. Se passar de 10, aparece um aviso: os valores Q estão divergindo e a política vai piorar. Foi o que aconteceu na v2, em que a perda chegou a bilhões. O `treino.csv` também guarda o `q_medio`, que deve ficar entre -20 e 0.
+
 ## 8.1 Continuar, voltar ao melhor ou recomeçar
 
 O `--episodios` é sempre o **total**, contando os já feitos.
@@ -265,10 +267,10 @@ No `git status`, confira que não aparecem `.venv`, `demanda` nem `resultados`.
 | Observação | Fase atual, se já pode trocar, densidade, fila e tempo sem verde na zona de cada faixa de entrada, densidade na zona de cada faixa de saída |
 | Volume no treino | 20 cenários entre 60% e 160% do volume calibrado; validação com 100% e 150% |
 | Max-pressure | Pressão normalizada pela capacidade (ocupação da entrada menos ocupação da saída), mantém a fase atual em empate |
-| Recompensa | Veículos parados na zona antes do semáforo (`--recompensa espera` usa o tempo de espera) |
+| Recompensa | Fração das zonas antes do semáforo ocupada por veículos parados, entre -1 e 0 (`--recompensa espera` usa o tempo de espera) |
 | Episódio | 4.200 s: 3.600 s de chegadas mais 600 s para esvaziar |
 | Mistura de veículos | Cerca de 80% carros, 15% motos e 5% ônibus (provisória) |
-| IDQN | Double DQN por semáforo, rede 64×64, replay de 50 mil, epsilon de 1,0 a 0,05 na primeira metade do treino |
+| IDQN | Double DQN por semáforo, rede 64×64, replay de 50 mil, epsilon de 1,0 a 0,05 na primeira metade do treino, gamma 0,95, taxa de aprendizado 0,0001, rede-alvo copiada a cada 1.000 atualizações, alvos cortados na faixa possível de Q (-20 a 0) |
 
 ## Problemas comuns
 

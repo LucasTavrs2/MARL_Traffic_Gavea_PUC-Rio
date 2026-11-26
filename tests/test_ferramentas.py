@@ -326,3 +326,55 @@ class TestVermelhoMaximo(unittest.TestCase):
         self.assertAlmostEqual(maior_espera_obs, 1.0)
         # carro parado no leste espera no máximo o vermelho máximo + uma decisão + o amarelo (+ folga da medição)
         self.assertLessEqual(pior, 60 + 5 + 3 + 5)
+
+
+# ---------------------------------------------------------------------- estabilidade do treino (v3)
+import numpy as np  # noqa: E402
+
+from marl_gavea.idqn import AgenteDQN  # noqa: E402
+
+
+class TestEstabilidade(unittest.TestCase):
+    def test_recompensa_fila_fica_entre_menos_um_e_zero(self):
+        sims = []
+
+        def conectar(env):
+            sims.append(SumoFalso())
+            return sims[-1]
+
+        env = AmbienteGavea("rede.net.xml", [], conectar=conectar, recompensa="fila")
+        env.reset()
+        s = env.semaforos["cruz"]
+        sim = sims[-1]
+        sim.n["norte_in"], sim.n["leste_in"] = 3, 2
+        env._ler_faixas()
+        self.assertAlmostEqual(env._recompensa("cruz"), -5 / s.cap_montante)
+        sim.n["norte_in"], sim.n["leste_in"] = 500, 500  # absurdo: fica em -1
+        env._ler_faixas()
+        self.assertEqual(env._recompensa("cruz"), -1.0)
+        env.fechar()
+
+    def _treinar_com_recompensa(self, recompensa, limites):
+        ag = AgenteDQN(2, 2, semente=0, aquecimento=64, alvo_cada=50, lr=1e-3, gamma=0.9, limites_q=limites)
+        rng = np.random.default_rng(0)
+        for _ in range(3000):
+            s = rng.random(2).astype(np.float32)
+            ag.guardar(s, int(rng.integers(2)), recompensa, rng.random(2).astype(np.float32))
+            ag.treinar()
+        q, _ = ag.q.forward(rng.random((200, 2)))
+        return q
+
+    def test_limites_seguram_o_valor_q(self):
+        # recompensa -5 por passo com gamma 0.9 levaria Q a -50; com os limites da recompensa
+        # normalizada (Q entre -10 e 0), a rede não passa muito de -10
+        q_sem = self._treinar_com_recompensa(-5.0, None)
+        q_com = self._treinar_com_recompensa(-5.0, (-10.0, 0.0))
+        self.assertLess(q_sem.mean(), -15)
+        self.assertGreater(q_com.min(), -12)
+
+    def test_checkpoint_guarda_os_limites(self):
+        ag = AgenteDQN(3, 2, limites_q=(-20.0, 0.0))
+        arrays, meta = ag.para_checkpoint("x_")
+        de_novo = AgenteDQN.de_checkpoint(arrays, "x_", meta)
+        self.assertEqual(de_novo.limites_q, (-20.0, 0.0))
+        self.assertEqual((de_novo.gamma, de_novo.lr, de_novo.alvo_cada), (0.95, 1e-4, 1000))

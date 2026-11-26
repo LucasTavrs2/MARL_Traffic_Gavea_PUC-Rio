@@ -11,7 +11,7 @@ Salva na pasta de --saida (padrão resultados/idqn):
 - ultimo.npz, melhor.npz           só as redes, para o avaliar.py
 - checkpoint.npz                   tudo para continuar (redes, otimizador, memória de replay, contadores)
 - checkpoint_melhor.npz            o mesmo, no episódio que teve o melhor resultado na validação
-- colapsos/epNNNN.npz              redes de cada validação que ficou acima do dobro do melhor resultado,
+- colapsos/epNNNN.npz              redes de cada validação, depois do fim da exploração, que ficou acima do dobro do melhor resultado,
                                    para investigar com: python scripts/investigar.py --modelo <arquivo>
 
 O checkpoint é gravado ao fim de cada episódio. Ctrl+C perde só o episódio em andamento.
@@ -36,7 +36,7 @@ from marl_gavea.comum import REDE, RESULTADOS, carregar_manifesto, rotas_do_conj
 from marl_gavea.idqn import AgenteDQN, carregar_checkpoint, salvar_checkpoint, salvar_modelo  # noqa: E402
 
 COLUNAS = [
-    "episodio", "cenario", "escala", "epsilon", "recompensa", "perda_media", "segundos",
+    "episodio", "cenario", "escala", "epsilon", "recompensa", "perda_media", "q_medio", "segundos",
     "tempo_perdido_medio_s", "espera_media_s", "tempo_viagem_medio_s", "pct_concluidos",
     "veiculos", "concluidos", "nao_inseridos", "teleportes", "fila_media_veic", "trocas_de_fase",
     "trocas_forcadas", "trocas_por_espera",
@@ -139,8 +139,10 @@ def main() -> None:
                    help="volumes da validação; o melhor modelo é o de menor média entre eles (padrão: 1.0 e 1.5)")
     p.add_argument("--exploracao", type=float, default=0.5,
                    help="fração do treino em que o epsilon cai de 1,0 até 0,05 (só vale em treino novo)")
-    p.add_argument("--lr", type=float, default=5e-4)
-    p.add_argument("--gamma", type=float, default=0.99)
+    p.add_argument("--lr", type=float, default=1e-4)
+    p.add_argument("--gamma", type=float, default=0.95)
+    p.add_argument("--alvo-cada", type=int, default=1000,
+                   help="atualizações entre cópias da rede online para a rede-alvo")
     p.add_argument("--semente", type=int, default=0)
     p.add_argument("--saida", default=str(RESULTADOS / "idqn"))
     p.add_argument("--manter-xml", action="store_true", help="guarda os XML do SUMO de cada episódio de treino")
@@ -153,7 +155,9 @@ def main() -> None:
     carimbo = datetime.now().strftime("%Y%m%d_%H%M%S")
     agentes, primeiro_ep, melhor = preparar_pasta(args, saida, carimbo)
     eps_passos = int(args.exploracao * args.episodios * (args.duracao // DELTA))
-    estado = {"recompensa": 0.0, "perdas": []}
+    estado = {"recompensa": 0.0, "perdas": [], "q": []}
+    # recompensa "fila" fica entre -1 e 0, então Q fica entre -1/(1-gamma) e 0
+    limites_q = (-1.0 / (1.0 - args.gamma), 0.0) if args.recompensa == "fila" else None
 
     def politica(env, obs):
         if not agentes:
@@ -161,6 +165,7 @@ def main() -> None:
                 agentes[a] = AgenteDQN(
                     env.dim_obs[a], env.n_acoes[a], semente=args.semente * 1000 + i,
                     lr=args.lr, gamma=args.gamma, eps_passos=eps_passos,
+                    alvo_cada=args.alvo_cada, limites_q=limites_q,
                 )
             print(f"Agentes: {len(agentes)} | fixos no programa original: {env.fixos or 'nenhum'}")
         if not estado.get("conferido"):
@@ -181,6 +186,7 @@ def main() -> None:
             perda = ag.treinar()
             if perda is not None:
                 estado["perdas"].append(perda)
+                estado["q"].append(ag.q_medio)
             estado["recompensa"] += recompensas[a]
 
     def gulosa(env, obs):
@@ -198,7 +204,7 @@ def main() -> None:
             pasta_ep = saida / "episodios" / f"ep{ep + 1:03d}"
             env = AmbienteGavea(REDE, cenario["rotas"], duracao=args.duracao, delta=DELTA,
                                 recompensa=args.recompensa, semente=ep, saida=pasta_ep)
-            estado["recompensa"], estado["perdas"] = 0.0, []
+            estado["recompensa"], estado["perdas"], estado["q"] = 0.0, [], []
             t0 = time.time()
             resumo = rodar_episodio(env, politica, aprender)
             segundos = time.time() - t0
@@ -210,14 +216,18 @@ def main() -> None:
                 "episodio": ep + 1, "cenario": cenario["nome"], "epsilon": epsilon,
                 "recompensa": estado["recompensa"],
                 "perda_media": float(np.mean(estado["perdas"])) if estado["perdas"] else float("nan"),
+                "q_medio": float(np.mean(estado["q"])) if estado["q"] else float("nan"),
                 "segundos": segundos, **resumo,
             })
+            perda_ep = float(np.mean(estado["perdas"])) if estado["perdas"] else float("nan")
             print(
                 f"ep {ep + 1:3d}/{args.episodios} | {cenario['nome']} | eps {epsilon:.2f} | "
                 f"perdido {resumo.get('tempo_perdido_medio_s', float('nan')):6.1f} s | "
-                f"teleportes {resumo.get('teleportes', '?')} | {segundos:5.0f} s",
+                f"teleportes {resumo.get('teleportes', '?')} | perda {perda_ep:.3f} | {segundos:5.0f} s",
                 flush=True,
             )
+            if perda_ep > 10:
+                print("   atenção: a perda passou de 10, sinal de que os valores Q estão divergindo", flush=True)
 
             melhorou = False
             if (ep + 1) % args.avaliar_cada == 0 or ep + 1 == args.episodios:
@@ -235,7 +245,10 @@ def main() -> None:
                     chave, v = criterio(r_val)
                     valores.append(v)
                 valor = float(np.mean(valores))
-                colapsou = math.isfinite(melhor) and valor > 2 * melhor
+                # só conta como colapso depois do fim da exploração: antes disso a oscilação é esperada
+                ag0 = next(iter(agentes.values()))
+                fim_exploracao = ag0.eps <= ag0.eps_final + 1e-9
+                colapsou = fim_exploracao and math.isfinite(melhor) and valor > 2 * melhor
                 melhorou = valor < melhor or not (saida / "melhor.npz").exists()
                 if melhorou:
                     melhor = valor
