@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import io
+import math
+import os
 import subprocess
 import sys
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest import mock
 
@@ -265,6 +268,12 @@ class TestInvestigar(unittest.TestCase):
             self.assertGreater(parados, 0)
             self.assertNotIn(("cruz", "norte_in"), {k for k, v in r["rastreador"].pior_espera.items() if v[0] > 30})
             self.assertEqual(len(r["rastreador"].registros), 600 // 5)
+            # o leste fica até 90 s no vermelho: a zona dele enche e o agente fica "cego" em parte do tempo
+            with mock.patch("sys.stdout", io.StringIO()):
+                tabela = investigar.relatorio_saturacao([r])
+            self.assertGreater(tabela[("cruz", 1.0)][0], 0.0)
+            self.assertLessEqual(tabela[("cruz", 1.0)][1], tabela[("cruz", 1.0)][0])
+            self.assertIn("zona_cheia", r["rastreador"].registros[0])
 
     def test_le_pasta_de_validacao(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -471,3 +480,136 @@ class TestVariosModelos(unittest.TestCase):
         self.assertEqual([l["metodo"] for l in linhas], ["max_pressao", "s0", "s1_ultimo"])
         self.assertIn("atraso_total_vs_max_pressao_pct", linhas[0])
         self.assertIn("s1_ultimo", texto)
+
+
+# ---------------------------------------------------------------------- mapa ampliado
+import subprocess as _sp  # noqa: E402
+
+import listar_semaforos  # noqa: E402
+
+REDE_DOIS_SINAIS = """<?xml version="1.0" encoding="UTF-8"?>
+<net version="1.20">
+    <location netOffset="0,0" convBoundary="0.00,0.00,100.00,200.00" origBoundary="-43.2300,-22.9800,-43.2200,-22.9700" projParameter="!"/>
+    <edge id="111#1" from="A0" to="J1" name="Rua Um"><lane id="111#1_0" index="0" speed="13.9" length="50.00" shape="0,0 50,0"/></edge>
+    <edge id="222" from="A1" to="J1"><lane id="222_0" index="0" speed="13.9" length="50.00" shape="50,-50 50,0"/></edge>
+    <edge id="333" from="J1" to="J2" name="Rua Tres"><lane id="333_0" index="0" speed="13.9" length="30.00" shape="50,0 50,30"/></edge>
+    <edge id="444" from="A2" to="J2" name="Rua Quatro"><lane id="444_0" index="0" speed="13.9" length="50.00" shape="0,30 50,30"/></edge>
+    <tlLogic id="J1" type="actuated" programID="0" offset="0">
+        <phase duration="30" state="Gr"/><phase duration="3" state="yr"/><phase duration="30" state="rG"/><phase duration="3" state="ry"/>
+    </tlLogic>
+    <tlLogic id="J2" type="actuated" programID="0" offset="0">
+        <phase duration="30" state="Gr"/><phase duration="3" state="yr"/><phase duration="30" state="Gr"/>
+    </tlLogic>
+    <junction id="A0" type="dead_end" x="0.00" y="0.00"/>
+    <junction id="A1" type="dead_end" x="50.00" y="-50.00"/>
+    <junction id="A2" type="dead_end" x="0.00" y="30.00"/>
+    <junction id="J1" type="traffic_light" x="50.00" y="0.00"/>
+    <junction id="J2" type="traffic_light" x="50.00" y="30.00"/>
+    <connection from="111#1" to="333" fromLane="0" toLane="0" tl="J1" linkIndex="0"/>
+    <connection from="222" to="333" fromLane="0" toLane="0" tl="J1" linkIndex="1"/>
+    <connection from="444" to="333" fromLane="0" toLane="0" tl="J2" linkIndex="0"/>
+    <connection from="333" to="999" fromLane="0" toLane="0" tl="J2" linkIndex="1"/>
+</net>
+"""
+
+OSM_DOIS = """<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6"><way id="222"><tag k="name" v="Avenida Dois"/></way></osm>
+"""
+
+
+class TestListarSemaforos(unittest.TestCase):
+    def test_agente_fixo_nomes_e_vizinho_perto(self):
+        with tempfile.TemporaryDirectory() as d:
+            rede, osm = Path(d) / "gavea.net.xml", Path(d) / "gavea.osm.xml"
+            rede.write_text(REDE_DOIS_SINAIS, encoding="utf-8")
+            osm.write_text(OSM_DOIS, encoding="utf-8")
+            lista = listar_semaforos.ler_rede(rede, osm)
+            argv = ["listar_semaforos.py", "--rede", str(rede)]
+            with mock.patch.object(sys, "argv", argv), mock.patch("sys.stdout", io.StringIO()) as tela:
+                listar_semaforos.main()
+            texto = tela.getvalue()
+            csv_texto = (Path(d) / "semaforos.csv").read_text(encoding="utf-8-sig")
+        por_id = {s["id"]: s for s in lista}
+        self.assertEqual([s["id"] for s in lista], ["J2", "J1"])  # do norte para o sul
+        self.assertEqual(por_id["J1"]["tipo"], "agente")
+        self.assertEqual(por_id["J1"]["fases_verdes"], 2)
+        self.assertEqual(por_id["J1"]["ruas"], "Avenida Dois x Rua Um")  # nome da rede e, sem ele, do OSM
+        self.assertEqual(por_id["J2"]["tipo"], "fixo")  # "Gr" repetido é uma fase verde só
+        self.assertAlmostEqual(por_id["J1"]["coord"][0], -22.98)
+        self.assertAlmostEqual(por_id["J1"]["coord"][1], -43.225)
+        self.assertAlmostEqual(por_id["J2"]["distancia_m"], 30.0)
+        self.assertIn("mesmo cruzamento?", texto)
+        self.assertIn("1 viram agentes", texto)
+        self.assertIn("Rua Quatro x Rua Tres", csv_texto)
+
+
+class TestEscolhaDoMapa(unittest.TestCase):
+    def _comum(self, mapa):
+        codigo = ("import sys; sys.path.insert(0, '.'); import marl_gavea.comum as c; "
+                  "print(c.MAPA, c.REDE.parent.name, c.DEMANDA.name, c.RESULTADOS.relative_to(c.RAIZ).as_posix())")
+        env = {**os.environ, "MARL_MAPA": mapa}
+        return _sp.run([sys.executable, "-c", codigo], cwd=Path(__file__).resolve().parents[1],
+                       env=env, capture_output=True, text=True)
+
+    def test_mapa_padrao_e_ampliado_nao_se_misturam(self):
+        r = self._comum("")
+        self.assertEqual(r.stdout.split(), ["gavea_real", "gavea_real", "demanda", "resultados"])
+        r = self._comum("gavea_ampliada")
+        self.assertEqual(r.stdout.split()[-4:], ["gavea_ampliada", "gavea_ampliada", "demanda_gavea_ampliada",
+                                                 "resultados/gavea_ampliada"])
+        self.assertIn("[mapa: gavea_ampliada]", r.stdout)
+
+    def test_mapa_inexistente_avisa(self):
+        r = self._comum("nao_existe")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("gavea_ampliada", r.stderr)  # lista os mapas que existem
+
+
+# ---------------------------------------------------------------------- coordenadas
+from marl_gavea import geo  # noqa: E402
+
+
+class TestCoordenadas(unittest.TestCase):
+    PROJ = "+proj=utm +zone=23 +south +ellps=WGS84 +datum=WGS84 +units=m +no_defs"
+
+    def test_meridiano_central_confere_com_integracao_numerica(self):
+        # arco de meridiano integrado na mão, independente das fórmulas da projeção
+        phi, n = math.radians(-22.98), 20000
+        h = phi / n
+        arco = sum(geo.A * (1 - geo.E2) / (1 - geo.E2 * math.sin((i + 0.5) * h) ** 2) ** 1.5 * h for i in range(n))
+        lat, lon = geo.utm_para_lat_lon(500000.0, 10000000.0 + geo.K0 * arco, 23, True)
+        self.assertAlmostEqual(lat, -22.98, places=7)
+        self.assertAlmostEqual(lon, -45.0, places=9)
+
+    def test_ida_e_volta_na_gavea(self):
+        for lat, lon in [(-22.9790, -43.2330), (-22.9835, -43.2213)]:
+            e, n = geo.lat_lon_para_utm(lat, lon, 23)
+            la, lo = geo.utm_para_lat_lon(e, n, 23, True)
+            self.assertAlmostEqual(la, lat, places=8)
+            self.assertAlmostEqual(lo, lon, places=8)
+
+    def test_netoffset_e_recorte_cortado_nao_esticam(self):
+        e, n = geo.lat_lon_para_utm(-22.9768, -43.2251, 23)
+        # origBoundary bem maior que o recorte (pontos de fora lidos do OSM): não pode influir
+        el = ET.fromstring(f'<location netOffset="-681000.00,-7457000.00" convBoundary="0,0,1700,900" '
+                           f'origBoundary="-43.30,-23.05,-43.15,-22.90" projParameter="{self.PROJ}"/>')
+        lat, lon = geo.Projecao.do_location(el).para_lat_lon(e - 681000.0, n - 7457000.0)
+        self.assertAlmostEqual(lat, -22.9768, places=7)
+        self.assertAlmostEqual(lon, -43.2251, places=7)
+
+
+class TestModeloDeOutroMapa(unittest.TestCase):
+    def test_modelo_guarda_o_mapa_e_recusa_outro(self):
+        from marl_gavea import idqn
+
+        with tempfile.TemporaryDirectory() as d:
+            arq = Path(d) / "m.npz"
+            idqn.salvar_modelo(arq, {"cruz": AgenteDQN(4, 2, semente=0)}, {"episodio": 1})
+            _, extra = idqn.carregar_modelo(arq)
+            self.assertEqual(extra["mapa"], "gavea_real")
+            self.assertEqual(extra["episodio"], 1)
+            idqn.PoliticaIDQN(arq)  # mesmo mapa: carrega
+            with mock.patch.object(idqn, "MAPA", "gavea_ampliada"):
+                with self.assertRaises(SystemExit) as erro:
+                    idqn.PoliticaIDQN(arq)
+            self.assertIn("Remove-Item Env:MARL_MAPA", str(erro.exception))

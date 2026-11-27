@@ -7,6 +7,8 @@ acima do dobro da mediana e, para a pior rodada, mostra:
   forçadas pelo verde máximo e a faixa que ficou mais tempo sem verde com carros esperando;
 - a fila de cada semáforo ao longo do episódio, em blocos de 10 minutos (onde a fila nasce primeiro);
 - onde os veículos foram teleportados.
+Para todas as rodadas, por volume: em quantas decisões cada agente estava "cego", com alguma zona
+antes dele cheia de parados (a fila passou do que ele enxerga), e com a recompensa no piso (-1).
 
 Modo 2, ler uma pasta de saída que já existe (por exemplo, uma validação que colapsou no treino):
 mostra de quais ruas saíram os veículos mais atrasados e quantos não terminaram a viagem.
@@ -15,6 +17,7 @@ Uso:
   python scripts/investigar.py --modelo resultados/idqn/melhor.npz
   python scripts/investigar.py --modelo resultados/idqn/melhor.npz --escalas 1.0 1.25 1.5
   python scripts/investigar.py --metodo max_pressao --escalas 1.5
+  python scripts/investigar.py --modelo resultados/idqn_v3.1_s0/melhor.npz --conjuntos teste --escalas 1.0 1.5
   python scripts/investigar.py --pasta resultados/idqn/validacao/ep1495
 """
 from __future__ import annotations
@@ -38,6 +41,7 @@ from marl_gavea.ambiente import AmbienteGavea  # noqa: E402
 from marl_gavea.comum import REDE, RESULTADOS, carregar_manifesto, espelhar_saida, rotas_do_conjunto  # noqa: E402
 
 BLOCO = 600  # segundos por coluna na linha do tempo
+CHEIA = 0.9  # zona com pelo menos 90% da capacidade ocupada por parados conta como cheia
 
 
 class Rastreador:
@@ -75,8 +79,12 @@ class Rastreador:
                     self.pior_espera[(a, f)] = (espera, t, parados)
         acoes = self.politica(env, obs)
         for a in env.agentes:
+            s = env.semaforos[a]
+            # a partir daqui a fila passa do que o agente enxerga (observação e recompensa)
+            cheia = any(env._soma(env._parado, s.zona_entrada[f]) >= CHEIA * s.cap_zona[f] for f in s.entradas)
             self.registros.append({"tempo": t, "agente": a, "estado": estados[a],
-                                   "acao": acoes.get(a, ""), "fila": filas[a]})
+                                   "acao": acoes.get(a, ""), "fila": filas[a],
+                                   "zona_cheia": int(cheia), "recompensa_no_piso": int(filas[a] >= s.cap_montante)})
         return acoes
 
 
@@ -153,7 +161,8 @@ def relatorio_rodada(r: dict, localizador: Localizador, top: int) -> None:
 
     r["pasta"].mkdir(parents=True, exist_ok=True)
     with (r["pasta"] / "decisoes.csv").open("w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=["tempo", "agente", "estado", "acao", "fila"])
+        w = csv.DictWriter(f, fieldnames=["tempo", "agente", "estado", "acao", "fila", "zona_cheia",
+                                          "recompensa_no_piso"])
         w.writeheader()
         w.writerows(reg)
     print(f"\nRegistro de todas as decisões em {r['pasta'] / 'decisoes.csv'}")
@@ -187,6 +196,28 @@ def ler_pasta(pasta: Path, localizador: Localizador, top: int) -> None:
               f"{nao_terminaram[aresta]:>10}  {d['coordenadas']:22s} {localizador.nome_aresta(aresta)}")
     if (pasta / "sumo.log").exists():
         relatorio_teleportes(pasta, localizador, top)
+
+
+def relatorio_saturacao(rodadas: list[dict]) -> dict:
+    """Em quantas decisões o agente estava "cego": alguma zona antes dele cheia de parados.
+
+    Com a zona cheia, uma fila maior que ela não muda nem a observação nem a recompensa. Se isso
+    for raro com 100% do volume e comum com 150%, a perda de vantagem no trânsito pesado vem daí."""
+    escalas = sorted({r["escala"] for r in rodadas})
+    agentes = sorted({x["agente"] for r in rodadas for x in r["rastreador"].registros})
+    tabela = {}
+    for a in agentes + ["todos"]:
+        for e in escalas:
+            regs = [x for r in rodadas if r["escala"] == e for x in r["rastreador"].registros
+                    if a == "todos" or x["agente"] == a]
+            n = len(regs) or 1
+            tabela[(a, e)] = (100.0 * sum(x["zona_cheia"] for x in regs) / n,
+                              100.0 * sum(x["recompensa_no_piso"] for x in regs) / n)
+    print(f"\nDecisões com alguma zona antes do semáforo cheia (>= {CHEIA:.0%} de parados) e com a recompensa no piso (-1):")
+    print(f"{'semáforo':30s}" + "".join(f"{f'{e * 100:.0f}%: cheia':>14s}{'piso':>7s}" for e in escalas))
+    for a in agentes + ["todos"]:
+        print(f"{a:30s}" + "".join(f"{tabela[(a, e)][0]:>13.1f}%{tabela[(a, e)][1]:>6.1f}%" for e in escalas))
+    return tabela
 
 
 def main() -> None:
@@ -232,6 +263,7 @@ def main() -> None:
     for r in colapsos:
         print(f"   COLAPSO: {r['cenario']}, volume {r['escala'] * 100:.0f}%")
 
+    relatorio_saturacao(rodadas)
     pior = max(rodadas, key=lambda r: r["resumo"].get("tempo_perdido_medio_s", float("-inf")))
     relatorio_rodada(pior, localizador, args.top)
     print(f"\nArquivos em {raiz} (o que apareceu aqui está em saida.txt)")

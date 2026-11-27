@@ -9,6 +9,8 @@ from pathlib import Path
 
 import numpy as np
 
+from marl_gavea.comum import MAPA
+
 
 class MLP:
     def __init__(self, tamanhos, rng):
@@ -234,7 +236,7 @@ def salvar_modelo(caminho, agentes: dict, extra: dict | None = None) -> None:
     caminho = Path(caminho)
     caminho.parent.mkdir(parents=True, exist_ok=True)
     arrays = {}
-    meta = {"agentes": [], "extra": extra or {}}
+    meta = {"agentes": [], "extra": {"mapa": MAPA, **(extra or {})}}
     for i, (nome, ag) in enumerate(agentes.items()):
         meta["agentes"].append({"id": nome, "dim": ag.dim, "n_acoes": ag.n_acoes, "oculto": list(ag.oculto)})
         for j, p in enumerate(ag.q.params):
@@ -265,6 +267,13 @@ class PoliticaIDQN:
 
     def __init__(self, caminho):
         self.agentes, self.extra = carregar_modelo(caminho)
+        mapa = self.extra.get("mapa")
+        if mapa and mapa != MAPA:
+            raise SystemExit(
+                f"O modelo {caminho} foi treinado no mapa '{mapa}', e o mapa atual é '{MAPA}'. "
+                + ("Rode Remove-Item Env:MARL_MAPA para voltar ao MVP." if mapa == "gavea_real"
+                   else f"Defina $env:MARL_MAPA=\"{mapa}\".")
+            )
 
     def __call__(self, env, obs):
         acoes = {}
@@ -272,8 +281,10 @@ class PoliticaIDQN:
             ag = self.agentes.get(a)
             if ag is None or ag.dim != env.dim_obs[a] or ag.n_acoes != env.n_acoes[a]:
                 raise SystemExit(
-                    f"O modelo não bate com a rede atual no semáforo '{a}'. "
-                    "A rede ou o agrupamento de semáforos mudou depois do treino: treine de novo."
+                    f"O modelo não bate com a rede atual (mapa '{MAPA}') no semáforo '{a}'. "
+                    "Se o modelo é de outro mapa, ajuste a variável MARL_MAPA (sem ela, vale o gavea_real: "
+                    "Remove-Item Env:MARL_MAPA). Se é deste mapa, a rede ou o agrupamento de semáforos mudou "
+                    "depois do treino: treine de novo."
                 )
             acoes[a] = ag.agir(obs[a], explorar=False)
         return acoes

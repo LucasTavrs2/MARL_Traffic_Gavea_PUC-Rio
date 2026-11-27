@@ -1,0 +1,18 @@
+﻿controlador,tipo,fases_verdes,ruas,lat,lon,entradas,vizinho_mais_proximo,distancia_m,cruzamentos
+msv_travessia_norte,fixo,1,Rua Marquês de São Vicente,-22.975738,-43.228132,1,msv_rotatoria_nordeste,239,9388436692
+bm_travessia_norte,fixo,1,Avenida Bartolomeu Mitre,-22.975881,-43.225410,1,bm_visconde_albuquerque,110,14031473161
+bm_visconde_albuquerque,agente,2,Avenida Bartolomeu Mitre x Avenida Visconde de Albuquerque,-22.976832,-43.225113,3,bm_travessia_norte,110,cluster_1765145546_1765145555_1765145576 cluster_250736664_3676900779_3676900782
+msv_rotatoria_nordeste,fixo,1,Rua Marquês de São Vicente,-22.976905,-43.230088,4,msv_rotatoria_oeste,76,12658130857 cluster_12658130858_12658130859
+msv_rotatoria_oeste,fixo,1,Rua Marquês de São Vicente,-22.977206,-43.230759,3,msv_rotatoria_nordeste,76,12651119807 cluster_250736996_7864136566
+mario_ribeiro_raul_machado,agente,4,Rua Ministro Raul Machado x Rua Mário Ribeiro,-22.977753,-43.222286,5,bm_mario_ribeiro,251,3677076352 3677076354 cluster_12096015917_1345343430_2283566080_3677076350
+rodrigo_otavio_norte,agente,2,Avenida Rodrigo Otávio x Rua Artur Araripe x Rua Visconde de Albuquerque,-22.977945,-43.226339,4,rodrigo_otavio_mario_ribeiro,54,1765145414 1765145578 553328624
+bm_mario_ribeiro,agente,4,Avenida Bartolomeu Mitre x Rua Mário Ribeiro,-22.978084,-43.224708,8,bm_tubira,127,146222031 2333874624 3677076353 cluster_146219615_146222032_2333874615_2333874616_#1more
+msv_travessia_puc,fixo,1,Rua Marquês de São Vicente,-22.978211,-43.233541,4,msv_duque_estrada,34,12660838314 12660838315
+msv_duque_estrada,agente,2,Rua Duque Estrada x Rua Marquês de São Vicente,-22.978381,-43.233822,3,msv_travessia_puc,34,cluster_12452739858_12660838313_1578702582
+rodrigo_otavio_mario_ribeiro,agente,6,Avenida Padre Leonel Franca x Avenida Rodrigo Otávio x Avenida Visconde de Albuquerque x Rua Mário Ribeiro,-22.978423,-43.226443,9,rodrigo_otavio_norte,54,1765145405 1765145410 cluster_12363563840_1765145492_378700698 cluster_146222027_1765145467_344381852 cluster_149338902_151034115_1765145444_1765145464_#6more cluster_1765145526_378700699
+rubens_berardo,fixo,1,Rua Vice-Governador Rubens Berardo,-22.978702,-43.229672,1,msv_rotatoria_oeste,200,1765145639
+bm_tubira,agente,3,Avenida Bartolomeu Mitre x Rua Tubira,-22.979156,-43.224265,6,bm_mario_ribeiro,127,3676900804 cluster_1345343433_3676900799_3676900807 cluster_1345343446_198102977_2467018881
+bm_juquia,agente,3,(sem nome) x Avenida Bartolomeu Mitre x Rua Juquiá,-22.980705,-43.223956,5,bm_tubira,174,1818405446 3676902650 cluster_1818405447_3676902646
+msv_travessia_oeste,fixo,1,Rua Marquês de São Vicente,-22.980723,-43.235433,2,msv_duque_estrada,308,cluster_250736987_4243232838_4243232839
+humberto_campos_jose_linhares,agente,2,Rua Humberto de Campos x Rua José Linhares,-22.982114,-43.221906,2,bm_juquia,262,198107509
+dias_ferreira_general_urquiza,agente,2,Rua Dias Ferreira x Rua General Urquiza,-22.982172,-43.224777,2,bm_juquia,183,1341652829

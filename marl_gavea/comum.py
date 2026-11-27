@@ -1,4 +1,10 @@
-"""Caminhos do projeto e localização do SUMO."""
+"""Caminhos do projeto e localização do SUMO.
+
+O mapa vem da variável de ambiente MARL_MAPA (pasta em maps/; padrão: gavea_real, o MVP).
+Cada mapa tem a própria demanda e os próprios resultados, para um não sobrescrever o outro:
+  gavea_real      -> demanda/              resultados/
+  outro_mapa      -> demanda_outro_mapa/   resultados/outro_mapa/
+"""
 from __future__ import annotations
 
 import json
@@ -7,10 +13,19 @@ import sys
 from pathlib import Path
 
 RAIZ = Path(__file__).resolve().parents[1]
-REDE = RAIZ / "maps" / "gavea_real" / "gavea.net.xml"
-DEMANDA = RAIZ / "demanda"
-RESULTADOS = RAIZ / "resultados"
+MAPA_PADRAO = "gavea_real"
+MAPA = os.environ.get("MARL_MAPA", "").strip() or MAPA_PADRAO
+PASTA_MAPA = RAIZ / "maps" / MAPA
+if not PASTA_MAPA.is_dir():
+    disponiveis = sorted(p.name for p in (RAIZ / "maps").iterdir() if p.is_dir()) if (RAIZ / "maps").is_dir() else []
+    raise SystemExit(f"MARL_MAPA={MAPA}, mas não existe a pasta {PASTA_MAPA}. Mapas: {', '.join(disponiveis)}")
+REDE = PASTA_MAPA / "gavea.net.xml"
+OSM = PASTA_MAPA / "gavea.osm.xml"
+DEMANDA = RAIZ / "demanda" if MAPA == MAPA_PADRAO else RAIZ / f"demanda_{MAPA}"
+RESULTADOS = RAIZ / "resultados" if MAPA == MAPA_PADRAO else RAIZ / "resultados" / MAPA
 MANIFESTO = DEMANDA / "manifesto.json"
+if MAPA != MAPA_PADRAO:
+    print(f"[mapa: {MAPA}]", flush=True)
 
 
 def preparar_sumo() -> Path:

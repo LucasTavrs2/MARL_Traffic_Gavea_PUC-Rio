@@ -13,6 +13,11 @@ O treino usa **demanda sintética**. O resultado mostra se o ambiente e o algori
 | `scripts/gerar_demanda.py` | Gera os cenários de carros, motos e ônibus |
 | `scripts/avaliar.py` | Compara os métodos nos mesmos cenários |
 | `scripts/treinar_idqn.py` | Treina o IDQN |
+| `scripts/investigar.py` | Detalha onde um controlador trava e quando os agentes ficam "cegos" |
+| `scripts/listar_semaforos.py` | Lista os semáforos da rede com as ruas de cada um |
+| `maps/gavea_real/` | Mapa do MVP |
+| `maps/gavea_ampliada/` | Mapa ampliado (seção 11) |
+| `docs/RESULTADOS_MVP.md` | Resultados de referência do MVP (tag `mvp-v3.1`) |
 | `tests/` | Testes que rodam sem o SUMO |
 | `requirements.txt`, `.gitignore` | Versões atualizadas (substituem as antigas) |
 
@@ -245,6 +250,20 @@ python scripts/investigar.py --pasta resultados\idqn\validacao\ep1495
 Daqui em diante, quando a validação passar do dobro do melhor resultado, o treino guarda as redes daquele momento em
 `colapsos\epNNNN.npz`, e dá para reproduzir o colapso com `--modelo resultados\idqn\colapsos\epNNNN.npz --conjuntos validacao`.
 
+## 9.3 Quando os agentes ficam "cegos"
+
+O agente enxerga só a zona antes do semáforo (até 100 m, ou até o semáforo anterior). Quando ela
+enche de carros parados, uma fila maior não muda nem a observação nem a recompensa. O `investigar.py`
+mostra, por volume, em quantas decisões cada agente tinha alguma zona cheia (90% ou mais de parados)
+e em quantas a recompensa estava no piso (-1):
+
+```powershell
+python scripts/investigar.py --modelo resultados\idqn_v3.1_s0\melhor.npz --conjuntos teste --escalas 1.0 1.5
+```
+
+Se a zona cheia for rara com 100% e comum com 150%, a perda de vantagem no trânsito pesado vem daí, e
+o próximo treino deve enxergar mais longe (zona maior, ou recompensa pela espera acumulada).
+
 ## 10. Subir o código
 
 ```powershell
@@ -255,6 +274,61 @@ git push
 ```
 
 No `git status`, confira que não aparecem `.venv`, `demanda` nem `resultados`.
+
+## 11. Mapa ampliado
+
+Cada mapa tem a própria pasta em `maps\`, a própria demanda e os próprios resultados, para o MVP
+continuar reproduzível. A variável `MARL_MAPA` escolhe o mapa em todos os scripts; sem ela, vale o
+`gavea_real`. Os scripts mostram `[mapa: ...]` quando usam outro.
+
+| Mapa | Demanda | Resultados |
+| --- | --- | --- |
+| `gavea_real` (padrão) | `demanda\` | `resultados\` |
+| `gavea_ampliada` | `demanda_gavea_ampliada\` | `resultados\gavea_ampliada\` |
+
+Antes de tudo, marque o estado do MVP e ignore as pastas de demanda dos outros mapas:
+
+```powershell
+git tag mvp-v3.1
+git push --tags
+Add-Content .gitignore "demanda_*/"
+```
+
+Construa a rede e confira os semáforos (o recorte sai do próprio `gavea.osm.xml`):
+
+```powershell
+.\maps\gavea_ampliada\build.ps1
+$env:MARL_MAPA="gavea_ampliada"
+python scripts/listar_semaforos.py
+```
+
+A lista mostra cada controlador com as ruas que se cruzam nele e avisa quando dois estão a menos de
+60 m um do outro (provavelmente o mesmo cruzamento). Esses casos se resolvem num `tls_grupos.nod.xml`
+na pasta do mapa, como no MVP, e o `build.ps1` passa a usá-lo. A lista também fica em
+`maps\gavea_ampliada\semaforos.csv`, que serve de base para o pedido de dados à CET-Rio.
+
+Para voltar ao MVP no mesmo terminal: `Remove-Item Env:MARL_MAPA`. A variável vale só para o
+terminal onde foi definida.
+
+### Ver o mapa no SUMO
+
+Só a rede, para conferir ruas e semáforos:
+
+```powershell
+sumo-gui -n maps\gavea_ampliada\gavea.net.xml
+```
+
+No menu Locate, a opção dos semáforos (Traffic Lights) lista todos os controladores pelo id e centraliza
+o escolhido; é o mesmo id do `listar_semaforos.py`. Para editar e inspecionar cruzamentos, o `netedit`
+abre o mesmo arquivo.
+
+Com trânsito e os semáforos controlados (roda o primeiro cenário de teste, com a variável do mapa definida):
+
+```powershell
+python scripts/avaliar.py --metodos max_pressao --gui
+```
+
+Enquanto a demanda do mapa novo não for calibrada, o trânsito pode parecer travado demais.
 
 ## Como ler os resultados
 

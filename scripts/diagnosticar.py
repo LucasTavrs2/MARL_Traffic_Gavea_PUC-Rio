@@ -30,10 +30,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from marl_gavea.comum import REDE, RESULTADOS, binario_sumo, carregar_manifesto, rotas_do_conjunto  # noqa: E402
+from marl_gavea.comum import OSM, REDE, RESULTADOS, binario_sumo, carregar_manifesto, rotas_do_conjunto  # noqa: E402
+from marl_gavea.geo import Projecao  # noqa: E402
 from marl_gavea.metricas import resumo_saida  # noqa: E402
 
-OSM = REDE.with_name("gavea.osm.xml")
 RE_FAIXA = re.compile(r"lane='([^']*)'")
 RE_MOTIVO = re.compile(r"\((jam|yield|wrong lane|blocked)\)")
 
@@ -91,9 +91,8 @@ def _meio(pontos: list[tuple[float, float]]) -> tuple[float, float]:
 class Localizador:
     """Traduz uma faixa do SUMO em rua, comprimento e coordenadas.
 
-    Lê a rede direto do XML (não depende do sumolib nem do pyproj). As coordenadas saem de uma
-    interpolação linear entre os limites da rede em metros e em graus, que no tamanho do recorte
-    (pouco mais de 1 km) erra bem menos de 1 m.
+    Lê a rede direto do XML (não depende do sumolib nem do pyproj). As coordenadas saem da inversa
+    da projeção UTM usada pelo netconvert (marl_gavea.geo).
     """
 
     def __init__(self, rede: Path = REDE, osm: Path = OSM):
@@ -101,14 +100,10 @@ class Localizador:
         self.arestas: dict[str, tuple[float, tuple[float, float]]] = {}
         self.nos: dict[str, tuple[float, float]] = {}
         self.entradas: dict[str, set[str]] = collections.defaultdict(set)
-        self.conv = self.orig = None
+        self.projecao = Projecao()
         for _, el in ET.iterparse(rede, events=("end",)):
             if el.tag == "location":
-                try:
-                    self.conv = [float(v) for v in el.get("convBoundary").split(",")]
-                    self.orig = [float(v) for v in el.get("origBoundary").split(",")]
-                except (AttributeError, ValueError):
-                    pass
+                self.projecao = Projecao.do_location(el)
             elif el.tag == "edge":
                 if el.get("function") != "internal":
                     faixa = el.find("lane")
@@ -127,11 +122,8 @@ class Localizador:
         return self.nomes.get(id_osm(aresta_id), f"(via OSM {id_osm(aresta_id)}, sem nome)")
 
     def para_lat_lon(self, x: float, y: float) -> str:
-        if not self.conv or not self.orig or self.conv[2] == self.conv[0] or self.conv[3] == self.conv[1]:
-            return ""
-        lon = self.orig[0] + (x - self.conv[0]) / (self.conv[2] - self.conv[0]) * (self.orig[2] - self.orig[0])
-        lat = self.orig[1] + (y - self.conv[1]) / (self.conv[3] - self.conv[1]) * (self.orig[3] - self.orig[1])
-        return f"{lat:.6f},{lon:.6f}"
+        ponto = self.projecao.para_lat_lon(x, y)
+        return f"{ponto[0]:.6f},{ponto[1]:.6f}" if ponto else ""
 
     def _no_da_faixa_interna(self, faixa: str) -> str | None:
         corpo = faixa[1:]
