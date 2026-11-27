@@ -14,6 +14,9 @@ from unittest import mock
 
 RAIZ = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(RAIZ))
+# os testes rodam sempre no mapa padrão, qualquer que seja o mapa escolhido no terminal ou no .mapa
+os.environ.pop("MARL_MAPA", None)
+os.environ["MARL_ARQ_MAPA"] = str(RAIZ / "tests" / "_sem_mapa")  # não existe: vale o padrão
 sys.path.insert(0, str(RAIZ / "scripts"))
 
 import diagnosticar  # noqa: E402
@@ -544,25 +547,47 @@ class TestListarSemaforos(unittest.TestCase):
 
 
 class TestEscolhaDoMapa(unittest.TestCase):
-    def _comum(self, mapa):
-        codigo = ("import sys; sys.path.insert(0, '.'); import marl_gavea.comum as c; "
-                  "print(c.MAPA, c.REDE.parent.name, c.DEMANDA.name, c.RESULTADOS.relative_to(c.RAIZ).as_posix())")
-        env = {**os.environ, "MARL_MAPA": mapa}
-        return _sp.run([sys.executable, "-c", codigo], cwd=Path(__file__).resolve().parents[1],
-                       env=env, capture_output=True, text=True)
+    RAIZ_PROJ = Path(__file__).resolve().parents[1]
+
+    def _rodar(self, codigo, variavel="", arquivo=None, *args):
+        env = {**os.environ, "MARL_MAPA": variavel,
+               "MARL_ARQ_MAPA": str(arquivo or self.RAIZ_PROJ / "tests" / "_sem_mapa")}
+        return _sp.run([sys.executable, *codigo, *args], cwd=self.RAIZ_PROJ, env=env, capture_output=True, text=True)
+
+    def _comum(self, variavel="", arquivo=None):
+        codigo = ["-c", "import sys; sys.path.insert(0, '.'); import marl_gavea.comum as c; "
+                  "print(c.MAPA, c.REDE.parent.name, c.DEMANDA.name, c.RESULTADOS.relative_to(c.RAIZ).as_posix())"]
+        return self._rodar(codigo, variavel, arquivo)
 
     def test_mapa_padrao_e_ampliado_nao_se_misturam(self):
-        r = self._comum("")
-        self.assertEqual(r.stdout.split(), ["gavea_real", "gavea_real", "demanda", "resultados"])
+        r = self._comum()
+        self.assertEqual(r.stdout.split()[-4:], ["gavea_real", "gavea_real", "demanda", "resultados"])
+        self.assertIn("[mapa: gavea_real (MVP) | padrão]", r.stdout)
         r = self._comum("gavea_ampliada")
         self.assertEqual(r.stdout.split()[-4:], ["gavea_ampliada", "gavea_ampliada", "demanda_gavea_ampliada",
                                                  "resultados/gavea_ampliada"])
-        self.assertIn("[mapa: gavea_ampliada]", r.stdout)
+        self.assertIn("[mapa: gavea_ampliada | variável MARL_MAPA deste terminal]", r.stdout)
 
     def test_mapa_inexistente_avisa(self):
         r = self._comum("nao_existe")
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("gavea_ampliada", r.stderr)  # lista os mapas que existem
+
+    def test_escolha_pelo_arquivo_vale_sem_a_variavel_e_perde_para_ela(self):
+        with tempfile.TemporaryDirectory() as d:
+            arq = Path(d) / ".mapa"
+            mapa_py = [str(self.RAIZ_PROJ / "scripts" / "mapa.py")]
+            r = self._rodar(mapa_py, "", arq, "gavea_ampliada")
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertEqual(arq.read_text(encoding="utf-8").strip(), "gavea_ampliada")
+            self.assertIn("[mapa: gavea_ampliada | arquivo .mapa]", self._comum("", arq).stdout)
+            self.assertIn("gavea_real", self._comum("gavea_real", arq).stdout.split()[-4:])  # a variável manda
+            r = self._rodar(mapa_py, "gavea_real", arq)  # só mostra, e avisa da variável
+            self.assertIn("Remove-Item Env:MARL_MAPA", r.stdout)
+            self.assertEqual(self._rodar(mapa_py, "", arq, "nao_existe").returncode, 1)
+            self._rodar(mapa_py, "", arq, "gavea_real")  # volta ao MVP: apaga o arquivo
+            self.assertFalse(arq.exists())
+            self.assertIn("[mapa: gavea_real (MVP) | padrão]", self._comum("", arq).stdout)
 
 
 # ---------------------------------------------------------------------- coordenadas
@@ -606,10 +631,10 @@ class TestModeloDeOutroMapa(unittest.TestCase):
             arq = Path(d) / "m.npz"
             idqn.salvar_modelo(arq, {"cruz": AgenteDQN(4, 2, semente=0)}, {"episodio": 1})
             _, extra = idqn.carregar_modelo(arq)
-            self.assertEqual(extra["mapa"], "gavea_real")
+            self.assertEqual(extra["mapa"], idqn.MAPA)
             self.assertEqual(extra["episodio"], 1)
             idqn.PoliticaIDQN(arq)  # mesmo mapa: carrega
             with mock.patch.object(idqn, "MAPA", "gavea_ampliada"):
                 with self.assertRaises(SystemExit) as erro:
                     idqn.PoliticaIDQN(arq)
-            self.assertIn("Remove-Item Env:MARL_MAPA", str(erro.exception))
+            self.assertIn(f"python scripts/mapa.py {idqn.MAPA}", str(erro.exception))

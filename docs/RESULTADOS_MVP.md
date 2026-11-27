@@ -116,6 +116,29 @@ Tempo perdido dos ônibus com 100%: max-pressure 79,4 s; IDQN 64,2 s (s0), 65,5 
 - **A v3 trouxe consistência entre sementes, não um pico maior:** a melhor rede da v2 continua
   competitiva e é a melhor de todas com 125%.
 
+## Medição de zona cheia (s0 `melhor`, 5 cenários de teste)
+
+Esta tabela mede em quantas decisões o agente estava "cego": com alguma zona antes do semáforo com 90% ou
+mais de carros parados. Feita com o `investigar.py` (GUIA, seção 9.3).
+
+| Semáforo | 100% | 150% |
+| --- | --- | --- |
+| rodrigo_otavio_mario_ribeiro | 23,0% | 45,3% |
+| bm_mario_ribeiro | 0,9% | 1,6% |
+| bm_tubira | 0,0% | 0,6% |
+| bm_visconde_albuquerque | 0,1% | 0,1% |
+| msv_duque_estrada | 0,0% | 0,0% |
+| rodrigo_otavio_norte | 0,0% | 0,0% |
+| Todos | 4,0% | 7,9% |
+
+- **A recompensa nunca chegou ao piso (-1) em nenhum semáforo.** Ela soma todas as aproximações, e nunca
+  estão todas cheias ao mesmo tempo.
+- **A cegueira se concentra no cruzamento principal** (Rodrigo Otávio / Visconde de Albuquerque / Mário
+  Ribeiro / Padre Leonel Franca), que é o gargalo da rede. Na pior rodada com 150%, a fila média dele cresceu
+  o episódio inteiro, de 11,6 para 42,5 veículos. Ele também concentra os teleportes do diagnóstico.
+- **Conclusão:** a perda de vantagem no trânsito pesado vem de um semáforo que deixa de enxergar a própria
+  fila, e não de a recompensa travar. É nele que a próxima variante precisa enxergar mais longe.
+
 ## Ressalvas
 
 - O "atuado" é a lógica padrão do SUMO, não o plano semafórico real da CET-Rio. A comparação com o

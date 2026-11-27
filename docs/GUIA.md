@@ -278,37 +278,47 @@ No `git status`, confira que não aparecem `.venv`, `demanda` nem `resultados`.
 ## 11. Mapa ampliado
 
 Cada mapa tem a própria pasta em `maps\`, a própria demanda e os próprios resultados, para o MVP
-continuar reproduzível. A variável `MARL_MAPA` escolhe o mapa em todos os scripts; sem ela, vale o
-`gavea_real`. Os scripts mostram `[mapa: ...]` quando usam outro.
+continuar reproduzível. O mapa usado por todos os scripts se escolhe com o `mapa.py`; a escolha fica
+no arquivo `.mapa` e vale para todos os terminais até ser trocada:
+
+```powershell
+python scripts/mapa.py gavea_ampliada   # passa a usar o mapa ampliado
+python scripts/mapa.py gavea_real       # volta ao MVP
+python scripts/mapa.py                  # mostra qual está escolhido
+```
+
+Todo script mostra na primeira linha qual mapa está usando, por exemplo
+`[mapa: gavea_ampliada | arquivo .mapa]`. Confira antes de gerar demanda ou treinar. A variável
+`MARL_MAPA`, se estiver definida num terminal, passa na frente do arquivo naquele terminal.
 
 | Mapa | Demanda | Resultados |
 | --- | --- | --- |
 | `gavea_real` (padrão) | `demanda\` | `resultados\` |
 | `gavea_ampliada` | `demanda_gavea_ampliada\` | `resultados\gavea_ampliada\` |
 
-Antes de tudo, marque o estado do MVP e ignore as pastas de demanda dos outros mapas:
+Os modelos guardam o mapa em que foram treinados, e o `avaliar.py` recusa um modelo de outro mapa.
+
+Antes de tudo, marque o estado do MVP e ignore os arquivos locais:
 
 ```powershell
 git tag mvp-v3.1
 git push --tags
 Add-Content .gitignore "demanda_*/"
+Add-Content .gitignore ".mapa"
 ```
 
 Construa a rede e confira os semáforos (o recorte sai do próprio `gavea.osm.xml`):
 
 ```powershell
 .\maps\gavea_ampliada\build.ps1
-$env:MARL_MAPA="gavea_ampliada"
+python scripts/mapa.py gavea_ampliada
 python scripts/listar_semaforos.py
 ```
 
 A lista mostra cada controlador com as ruas que se cruzam nele e avisa quando dois estão a menos de
-60 m um do outro (provavelmente o mesmo cruzamento). Esses casos se resolvem num `tls_grupos.nod.xml`
-na pasta do mapa, como no MVP, e o `build.ps1` passa a usá-lo. A lista também fica em
+60 m um do outro (provavelmente o mesmo cruzamento). Esses casos se resolvem no `tls_grupos.nod.xml`
+da pasta do mapa, e o `build.ps1` passa a usá-lo. A lista também fica em
 `maps\gavea_ampliada\semaforos.csv`, que serve de base para o pedido de dados à CET-Rio.
-
-Para voltar ao MVP no mesmo terminal: `Remove-Item Env:MARL_MAPA`. A variável vale só para o
-terminal onde foi definida.
 
 ### Ver o mapa no SUMO
 
@@ -322,7 +332,7 @@ No menu Locate, a opção dos semáforos (Traffic Lights) lista todos os control
 o escolhido; é o mesmo id do `listar_semaforos.py`. Para editar e inspecionar cruzamentos, o `netedit`
 abre o mesmo arquivo.
 
-Com trânsito e os semáforos controlados (roda o primeiro cenário de teste, com a variável do mapa definida):
+Com trânsito e os semáforos controlados (roda o primeiro cenário de teste do mapa escolhido):
 
 ```powershell
 python scripts/avaliar.py --metodos max_pressao --gui

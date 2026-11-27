@@ -1,6 +1,7 @@
 """Testes que não precisam do SUMO. Rode na raiz do repositório: python -m unittest discover -s tests -v"""
 from __future__ import annotations
 
+import os
 import sys
 import tempfile
 import unittest
@@ -10,6 +11,9 @@ import numpy as np
 
 RAIZ = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(RAIZ))
+# os testes rodam sempre no mapa padrão, qualquer que seja o mapa escolhido no terminal ou no .mapa
+os.environ.pop("MARL_MAPA", None)
+os.environ["MARL_ARQ_MAPA"] = str(RAIZ / "tests" / "_sem_mapa")  # não existe: vale o padrão
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from marl_gavea.ambiente import AmbienteGavea, rodar_episodio  # noqa: E402

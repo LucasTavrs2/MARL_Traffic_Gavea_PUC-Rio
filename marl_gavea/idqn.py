@@ -271,8 +271,8 @@ class PoliticaIDQN:
         if mapa and mapa != MAPA:
             raise SystemExit(
                 f"O modelo {caminho} foi treinado no mapa '{mapa}', e o mapa atual é '{MAPA}'. "
-                + ("Rode Remove-Item Env:MARL_MAPA para voltar ao MVP." if mapa == "gavea_real"
-                   else f"Defina $env:MARL_MAPA=\"{mapa}\".")
+                f"Troque com: python scripts/mapa.py {mapa} (se a variável MARL_MAPA estiver definida "
+                "neste terminal, ela manda: Remove-Item Env:MARL_MAPA)."
             )
 
     def __call__(self, env, obs):
@@ -282,9 +282,9 @@ class PoliticaIDQN:
             if ag is None or ag.dim != env.dim_obs[a] or ag.n_acoes != env.n_acoes[a]:
                 raise SystemExit(
                     f"O modelo não bate com a rede atual (mapa '{MAPA}') no semáforo '{a}'. "
-                    "Se o modelo é de outro mapa, ajuste a variável MARL_MAPA (sem ela, vale o gavea_real: "
-                    "Remove-Item Env:MARL_MAPA). Se é deste mapa, a rede ou o agrupamento de semáforos mudou "
-                    "depois do treino: treine de novo."
+                    "Se o modelo é de outro mapa, troque com python scripts/mapa.py <mapa> (o MVP é o "
+                    "gavea_real). Se é deste mapa, a rede ou o agrupamento de semáforos mudou depois do "
+                    "treino: treine de novo."
                 )
             acoes[a] = ag.agir(obs[a], explorar=False)
         return acoes

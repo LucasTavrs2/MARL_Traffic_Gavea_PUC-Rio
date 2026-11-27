@@ -1,6 +1,11 @@
 """Caminhos do projeto e localização do SUMO.
 
-O mapa vem da variável de ambiente MARL_MAPA (pasta em maps/; padrão: gavea_real, o MVP).
+O mapa (uma pasta em maps/) vem, nesta ordem:
+  1. da variável de ambiente MARL_MAPA, se estiver definida no terminal;
+  2. do arquivo .mapa na raiz do projeto, gravado por `python scripts/mapa.py <nome>` (vale para
+     todos os terminais, até ser trocado);
+  3. do padrão, gavea_real (o MVP).
+Todo script mostra no começo qual mapa está usando.
 Cada mapa tem a própria demanda e os próprios resultados, para um não sobrescrever o outro:
   gavea_real      -> demanda/              resultados/
   outro_mapa      -> demanda_outro_mapa/   resultados/outro_mapa/
@@ -14,18 +19,37 @@ from pathlib import Path
 
 RAIZ = Path(__file__).resolve().parents[1]
 MAPA_PADRAO = "gavea_real"
-MAPA = os.environ.get("MARL_MAPA", "").strip() or MAPA_PADRAO
+ARQ_MAPA = Path(os.environ.get("MARL_ARQ_MAPA") or RAIZ / ".mapa")  # os testes apontam para outro arquivo
+
+
+def mapas_disponiveis() -> list[str]:
+    pasta = RAIZ / "maps"
+    return sorted(p.name for p in pasta.iterdir() if p.is_dir()) if pasta.is_dir() else []
+
+
+def mapa_escolhido() -> tuple[str, str]:
+    """(mapa, de onde veio a escolha)."""
+    variavel = os.environ.get("MARL_MAPA", "").strip()
+    if variavel:
+        return variavel, "variável MARL_MAPA deste terminal"
+    try:
+        nome = ARQ_MAPA.read_text(encoding="utf-8").strip()
+    except OSError:
+        nome = ""
+    return (nome, "arquivo .mapa") if nome else (MAPA_PADRAO, "padrão")
+
+
+MAPA, ORIGEM_MAPA = mapa_escolhido()
 PASTA_MAPA = RAIZ / "maps" / MAPA
 if not PASTA_MAPA.is_dir():
-    disponiveis = sorted(p.name for p in (RAIZ / "maps").iterdir() if p.is_dir()) if (RAIZ / "maps").is_dir() else []
-    raise SystemExit(f"MARL_MAPA={MAPA}, mas não existe a pasta {PASTA_MAPA}. Mapas: {', '.join(disponiveis)}")
+    raise SystemExit(f"O mapa '{MAPA}' ({ORIGEM_MAPA}) não existe em maps/. "
+                     f"Mapas: {', '.join(mapas_disponiveis())}. Troque com: python scripts/mapa.py <nome>")
 REDE = PASTA_MAPA / "gavea.net.xml"
 OSM = PASTA_MAPA / "gavea.osm.xml"
 DEMANDA = RAIZ / "demanda" if MAPA == MAPA_PADRAO else RAIZ / f"demanda_{MAPA}"
 RESULTADOS = RAIZ / "resultados" if MAPA == MAPA_PADRAO else RAIZ / "resultados" / MAPA
 MANIFESTO = DEMANDA / "manifesto.json"
-if MAPA != MAPA_PADRAO:
-    print(f"[mapa: {MAPA}]", flush=True)
+print(f"[mapa: {MAPA}{' (MVP)' if MAPA == MAPA_PADRAO else ''} | {ORIGEM_MAPA}]", flush=True)
 
 
 def preparar_sumo() -> Path:
