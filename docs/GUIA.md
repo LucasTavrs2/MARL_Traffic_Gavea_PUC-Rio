@@ -215,6 +215,16 @@ python scripts/avaliar.py --metodos atuado max_pressao idqn --modelo resultados\
 Sai uma tabela por volume. O que importa é se o IDQN continua à frente do max-pressure quando o
 trânsito pesa, e se ele trava (tempo perdido e teleportes disparando) antes dos outros.
 
+Para comparar vários modelos na mesma tabela (sementes diferentes, `melhor` contra `ultimo`), use
+`--modelos rotulo=arquivo`. Cada rótulo vira uma linha:
+
+```powershell
+python scripts/avaliar.py --metodos atuado max_pressao --escalas 1.0 1.25 1.5 --modelos s0=resultados\idqn_v3.1_s0\melhor.npz s0_ultimo=resultados\idqn_v3.1_s0\ultimo.npz
+```
+
+O `melhor.npz` é o melhor entre centenas de validações num único cenário, e por isso tende a parecer
+melhor na validação do que é. Quem decide é o conjunto de teste: confira também o `ultimo.npz`.
+
 ## 9.2 Investigar um colapso
 
 Roda um método em todos os cenários (treino, validação e teste), marca as rodadas que travaram e

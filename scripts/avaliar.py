@@ -1,6 +1,7 @@
 """Compara métodos de controle nos mesmos cenários de demanda.
 
 Métodos: atuado (programa do SUMO), aleatorio, max_pressao e idqn (precisa de --modelo).
+Vários modelos de uma vez: --modelos rotulo=arquivo ... (o rótulo vira o nome do método na tabela).
 Cada cenário usa a mesma semente do SUMO para todos os métodos, então a comparação é justa.
 
 Teste de estresse: --escalas multiplica o volume de cada cenário (1.0 = volume calibrado), sem
@@ -11,12 +12,14 @@ Exemplos:
   python scripts/avaliar.py --metodos atuado max_pressao idqn --modelo resultados/idqn/melhor.npz
   python scripts/avaliar.py --metodos idqn --modelo resultados/idqn/melhor.npz --gui
   python scripts/avaliar.py --metodos atuado max_pressao idqn --modelo resultados/idqn/melhor.npz --escalas 1.0 1.25 1.5
+  python scripts/avaliar.py --metodos atuado max_pressao --modelos s0=resultados/idqn_s0/melhor.npz s1=resultados/idqn_s1/melhor.npz
 """
 from __future__ import annotations
 
 import argparse
 import csv
 import math
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -40,6 +43,7 @@ METRICAS = [
     ("teleportes", "teleportes"),
     ("tempo_perdido_onibus_s", "perdido ônibus (s)"),
 ]
+METODOS = ["atuado", "aleatorio", "max_pressao", "idqn"]
 # Comparação em atraso total contra estes métodos, quando estão na mesma rodada.
 REFERENCIAS = ("atuado", "max_pressao")
 
@@ -66,6 +70,25 @@ def criar_politica(nome: str, modelo: str | None):
     raise SystemExit(f"Método desconhecido: {nome}")
 
 
+def ler_modelos(itens) -> dict[str, str]:
+    """Lê --modelos: 'rotulo=arquivo', ou só 'arquivo' (rótulo = pasta_arquivo). Devolve {rotulo: arquivo}."""
+    modelos = {}
+    for item in itens or []:
+        rotulo, sep, caminho = item.partition("=")
+        if not sep:
+            caminho = item
+            p = Path(caminho.replace("\\", "/"))
+            rotulo = f"{p.parent.name}_{p.stem}" if p.parent.name else p.stem
+        if not re.fullmatch(r"[\w.\-]+", rotulo):
+            raise SystemExit(f"Rótulo inválido em --modelos: {rotulo!r} (use letras, números, _ . -)")
+        if rotulo in modelos or rotulo in METODOS:
+            raise SystemExit(f"Rótulo repetido ou reservado em --modelos: {rotulo}")
+        if not Path(caminho).exists():
+            raise SystemExit(f"Não achei o modelo {caminho} (rótulo {rotulo})")
+        modelos[rotulo] = caminho
+    return modelos
+
+
 def media_desvio(valores):
     v = [x for x in valores if isinstance(x, (int, float)) and not math.isnan(x)]
     if not v:
@@ -76,8 +99,10 @@ def media_desvio(valores):
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--metodos", nargs="+", default=["atuado", "aleatorio", "max_pressao"],
-                   choices=["atuado", "aleatorio", "max_pressao", "idqn"])
+                   choices=METODOS)
     p.add_argument("--modelo", help="arquivo .npz do IDQN")
+    p.add_argument("--modelos", nargs="+", metavar="ROTULO=ARQUIVO",
+                   help="vários modelos IDQN na mesma rodada, cada um com seu rótulo na tabela")
     p.add_argument("--conjunto", default="teste", choices=["teste", "validacao", "treino"])
     p.add_argument("--duracao", type=int, default=4200)
     p.add_argument("--escalas", nargs="+", type=float, default=[1.0],
@@ -93,6 +118,11 @@ def main() -> None:
     pasta = Path(args.saida) / carimbo
     linhas = []
     politicas = {m: criar_politica(m, args.modelo) for m in args.metodos}  # falha logo se faltar o modelo
+    if args.modelos:
+        from marl_gavea.idqn import PoliticaIDQN
+
+        politicas.update({r: PoliticaIDQN(c) for r, c in ler_modelos(args.modelos).items()})
+    largura = max(12, *(len(m) for m in politicas))
     impedir_suspensao()
     espelhar_saida(pasta / "saida.txt")
 
@@ -104,7 +134,7 @@ def main() -> None:
                                     gui=args.gui, semente=c["semente"], saida=saida, escala=escala)
                 resumo = rodar_episodio(env, politica)
                 linhas.append({"escala": escala, "metodo": metodo, "cenario": c["nome"], **resumo})
-                print(f"{escala * 100:4.0f}%  {metodo:12s} {c['nome']:14s} "
+                print(f"{escala * 100:4.0f}%  {metodo:{largura}s} {c['nome']:14s} "
                       f"perdido {resumo.get('tempo_perdido_medio_s', float('nan')):6.1f} s"
                       f" | teleportes {resumo.get('teleportes', '?')}", flush=True)
 
@@ -123,17 +153,17 @@ def main() -> None:
                    + [f"atraso_total_vs_{r}_pct" for r in refs])
         for escala in args.escalas:
             resumo_metodos = {}
-            for metodo in args.metodos:
+            for metodo in politicas:
                 do_metodo = [l for l in linhas if l["metodo"] == metodo and l["escala"] == escala]
                 resumo_metodos[metodo] = {m: media_desvio([l.get(m) for l in do_metodo]) for m, _ in METRICAS}
             volume = f", volume {escala * 100:.0f}%" if escala != 1.0 or len(args.escalas) > 1 else ""
             print(f"\nResumo no conjunto '{args.conjunto}' ({len(cenarios)} cenário(s){volume}), média ± desvio:")
-            print(f"{'método':12s}" + "".join(f"{rotulo:>22s}" for _, rotulo in METRICAS)
+            print(f"{'método':{largura}s}" + "".join(f"{rotulo:>22s}" for _, rotulo in METRICAS)
                   + "".join(f"{'vs ' + r:>16s}" for r in refs))
             for metodo, r in resumo_metodos.items():
                 atraso = r["atraso_total_medio_s"][0]
                 variacoes = [variacao_pct(atraso, resumo_metodos[ref]["atraso_total_medio_s"][0]) for ref in refs]
-                print(f"{metodo:12s}" + "".join(f"{r[m][0]:>14.1f} ± {r[m][1]:<5.1f}" for m, _ in METRICAS)
+                print(f"{metodo:{largura}s}" + "".join(f"{r[m][0]:>14.1f} ± {r[m][1]:<5.1f}" for m, _ in METRICAS)
                       + "".join(f"{v:>+15.1f}%" for v in variacoes))
                 w.writerow([escala, metodo] + [round(x, 3) for m, _ in METRICAS for x in r[m]]
                            + [round(v, 2) for v in variacoes])

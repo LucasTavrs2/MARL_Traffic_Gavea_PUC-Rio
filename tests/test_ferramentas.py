@@ -417,3 +417,57 @@ class TestTempoESuspensao(unittest.TestCase):
         with mock.patch.object(comum.sys, "platform", "win32"), mock.patch.dict(sys.modules, {"ctypes": falso}):
             self.assertTrue(comum.impedir_suspensao())
         chamada.assert_called_once_with(0x80000001)
+
+
+class TestVariosModelos(unittest.TestCase):
+    def test_rotulos(self):
+        with tempfile.TemporaryDirectory() as d:
+            pasta = Path(d) / "idqn_v3.1_s0"
+            pasta.mkdir()
+            (pasta / "melhor.npz").write_bytes(b"x")
+            (pasta / "ultimo.npz").write_bytes(b"x")
+            m = avaliar.ler_modelos([f"s0={pasta / 'melhor.npz'}", str(pasta / "ultimo.npz")])
+            self.assertEqual(list(m), ["s0", "idqn_v3.1_s0_ultimo"])
+            # caminho no formato do Windows também vira rótulo pasta_arquivo
+            with mock.patch.object(avaliar.Path, "exists", return_value=True):
+                m = avaliar.ler_modelos([r"resultados\idqn_s2\melhor.npz"])
+            self.assertEqual(list(m), ["idqn_s2_melhor"])
+
+    def test_rotulo_invalido_repetido_ou_arquivo_ausente(self):
+        with tempfile.TemporaryDirectory() as d:
+            arq = Path(d) / "m.npz"
+            arq.write_bytes(b"x")
+            for itens in ([f"a b={arq}"], [f"x={arq}", f"x={arq}"], [f"atuado={arq}"], [f"y={Path(d) / 'nao.npz'}"]):
+                with self.assertRaises(SystemExit):
+                    avaliar.ler_modelos(itens)
+
+    def test_rodada_com_dois_modelos_e_baseline(self):
+        import csv as _csv
+
+        original = avaliar.AmbienteGavea
+
+        def ambiente_falso(rede, rotas, **kw):
+            return original("rede.net.xml", rotas, conectar=lambda env: SumoFalso(), **kw)
+
+        class PoliticaFalsa(SempreFase0):
+            def __init__(self, caminho):
+                self.caminho = caminho
+
+        cenarios = [{"nome": "teste_falso", "semente": 0, "rotas": []}]
+        with tempfile.TemporaryDirectory() as tmp:
+            for nome in ("a.npz", "b.npz"):
+                (Path(tmp) / nome).write_bytes(b"x")
+            argv = ["avaliar.py", "--metodos", "max_pressao", "--duracao", "300", "--saida", tmp,
+                    "--modelos", f"s0={Path(tmp) / 'a.npz'}", f"s1_ultimo={Path(tmp) / 'b.npz'}"]
+            with mock.patch.object(avaliar, "AmbienteGavea", ambiente_falso), \
+                    mock.patch.object(avaliar, "carregar_manifesto", return_value={}), \
+                    mock.patch.object(avaliar, "rotas_do_conjunto", return_value=cenarios), \
+                    mock.patch("marl_gavea.idqn.PoliticaIDQN", PoliticaFalsa), \
+                    mock.patch.object(sys, "argv", argv), mock.patch("sys.stdout", io.StringIO()) as tela:
+                avaliar.main()
+                texto = tela.getvalue()
+            resumo = next(Path(tmp).glob("*/resumo.csv"))
+            linhas = list(_csv.DictReader(resumo.read_text(encoding="utf-8").splitlines()))
+        self.assertEqual([l["metodo"] for l in linhas], ["max_pressao", "s0", "s1_ultimo"])
+        self.assertIn("atraso_total_vs_max_pressao_pct", linhas[0])
+        self.assertIn("s1_ultimo", texto)
